@@ -19,13 +19,13 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:3000",
   "https://agentic-system-frontend.vercel.app",    // Without dash
-  "https://agentic-system-front-end.vercel.app",   // ← ADD THIS (WITH DASH)
+  "https://agentic-system-front-end.vercel.app",   // WITH DASH
   "https://agentic-system-1.onrender.com",
   "https://agentic-system-frontend-67k3.vercel.app",
-  // ... keep the rest
- // Main preview domain
-  /^https:\/\/agentic-system-frontend-[\w-]+\.vercel\.app$/, // Pattern for all preview URLs
-  /^https:\/\/agentic-system-frontend-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/ // PR previews
+  // Add patterns for dash versions too:
+  /^https:\/\/agentic-system-frontend-[\w-]+\.vercel\.app$/,  // Without dash pattern
+  /^https:\/\/agentic-system-front-end-[\w-]+\.vercel\.app$/, // WITH DASH pattern (NEW)
+  /^https:\/\/agentic-system-frontend-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/
 ];
 
 app.use(cors({
@@ -55,8 +55,8 @@ app.use(cors({
     if (isAllowed) {
       callback(null, true);
     } else {
-      // Special handling for Vercel previews (catch-all)
-      if (origin.includes('agentic-system-frontend') && origin.includes('.vercel.app')) {
+      // ⚠️ CRITICAL FIX: Allow BOTH with and without dash
+      if ((origin.includes('agentic-system-frontend') || origin.includes('agentic-system-front-end')) && origin.includes('.vercel.app')) {
         console.log(`✅ Allowing Vercel preview deployment: ${origin}`);
         return callback(null, true);
       }
@@ -66,6 +66,7 @@ app.use(cors({
       callback(new Error(`Origin ${origin} not allowed by CORS policy`));
     }
   },
+
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: [
@@ -90,7 +91,7 @@ app.options("*", (req, res) => {
     if (typeof allowed === 'string') return allowed === origin;
     if (allowed instanceof RegExp) return allowed.test(origin);
     return false;
-  }) || (origin && origin.includes('agentic-system-frontend') && origin.includes('.vercel.app'));
+}) || (origin && (origin.includes('agentic-system-frontend') || origin.includes('agentic-system-front-end')) && origin.includes('.vercel.app'));
 
   if (isAllowed || !origin) {
     res.setHeader("Access-Control-Allow-Origin", origin || "*");
