@@ -15,19 +15,7 @@ const authRoutes = require("./routes/authRoutes");
 const app = express();
 
 // ==================== CORS CONFIGURATION ====================
-// Allow specific origins for security
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://agentic-system-frontend.vercel.app",    // Without dash
-  "https://agentic-system-front-end.vercel.app",   // WITH DASH
-  "https://agentic-system-1.onrender.com",
-  "https://agentic-system-frontend-67k3.vercel.app",
-  // Add patterns for dash versions too:
-  /^https:\/\/agentic-system-frontend-[\w-]+\.vercel\.app$/,  // Without dash pattern
-  /^https:\/\/agentic-system-front-end-[\w-]+\.vercel\.app$/, // WITH DASH pattern (NEW)
-  /^https:\/\/agentic-system-frontend-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/
-];
-
+// Universal CORS configuration for all Vercel URLs
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, or same-origin)
@@ -37,16 +25,36 @@ app.use(cors({
 
     // Debug logging
     console.log(`🌐 CORS checking origin: ${origin}`);
+    
+    // List of ALL allowed origins and patterns
+    const allowedPatterns = [
+      // Exact matches
+      "http://localhost:3000",
+      "https://agentic-system-frontend.vercel.app",
+      "https://agentic-system-front-end.vercel.app", 
+      "https://agentic-system-1.onrender.com",
+      "https://agentic-system-frontend-67k3.vercel.app",
+      
+      // Vercel patterns - match ALL variations
+      /^https:\/\/agentic-system-front(end|-end|-)[\w-]*\.vercel\.app$/,
+      /^https:\/\/agentic-system-front(end|-end|-)[a-zA-Z0-9-]*\.vercel\.app$/,
+      /^https:\/\/agentic-system-front(end|-end|-)[a-zA-Z0-9-]*-srilus-projects\.vercel\.app$/,
+      
+      // Catch-all for any agentic-system Vercel domain
+      /^https:\/\/agentic-system-[\w-]+\.vercel\.app$/,
+      /^https:\/\/agentic-system-[a-zA-Z0-9-]+\.vercel\.app$/,
+      /^https:\/\/agentic-system-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/
+    ];
 
-    // Check if the origin is in the allowed list (including regex patterns)
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (typeof allowed === 'string') {
-        const match = allowed === origin;
+    // Check if origin matches any pattern
+    const isAllowed = allowedPatterns.some(pattern => {
+      if (typeof pattern === 'string') {
+        const match = pattern === origin;
         if (match) console.log(`✅ Exact match: ${origin}`);
         return match;
-      } else if (allowed instanceof RegExp) {
-        const match = allowed.test(origin);
-        if (match) console.log(`✅ Regex match: ${origin} matches ${allowed}`);
+      } else if (pattern instanceof RegExp) {
+        const match = pattern.test(origin);
+        if (match) console.log(`✅ Regex match: ${origin}`);
         return match;
       }
       return false;
@@ -55,18 +63,16 @@ app.use(cors({
     if (isAllowed) {
       callback(null, true);
     } else {
-      // ⚠️ CRITICAL FIX: Allow BOTH with and without dash
-      if ((origin.includes('agentic-system-frontend') || origin.includes('agentic-system-front-end')) && origin.includes('.vercel.app')) {
-        console.log(`✅ Allowing Vercel preview deployment: ${origin}`);
+      // Final fallback: If it's a Vercel domain with agentic-system, allow it
+      if (origin.includes('agentic-system') && origin.includes('.vercel.app')) {
+        console.log(`✅ Allowing Vercel domain (fallback): ${origin}`);
         return callback(null, true);
       }
       
       console.log(`❌ CORS blocked origin: ${origin}`);
-      console.log(`📋 Allowed patterns:`, allowedOrigins);
       callback(new Error(`Origin ${origin} not allowed by CORS policy`));
     }
   },
-
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: [
@@ -80,37 +86,14 @@ app.use(cors({
   ],
   exposedHeaders: ["Content-Length", "Content-Type", "Authorization", "Access-Control-Allow-Origin"],
   optionsSuccessStatus: 204,
-  maxAge: 86400, // Cache preflight requests for 24 hours
+  maxAge: 86400,
   preflightContinue: false
 }));
 
-// Explicitly handle OPTIONS requests for all routes
-app.options("*", (req, res) => {
-  const origin = req.headers.origin;
-  const isAllowed = allowedOrigins.some(allowed => {
-    if (typeof allowed === 'string') return allowed === origin;
-    if (allowed instanceof RegExp) return allowed.test(origin);
-    return false;
-}) || (origin && (origin.includes('agentic-system-frontend') || origin.includes('agentic-system-front-end')) && origin.includes('.vercel.app'));
-
-  if (isAllowed || !origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Max-Age", "86400");
-    res.status(204).end();
-  } else {
-    res.status(403).json({
-      success: false,
-      message: "CORS preflight failed",
-      origin: origin
-    });
-  }
-});
+// Remove the manual app.options("*") handler - CORS middleware handles it
 
 // ==================== MIDDLEWARE ====================
-app.use(express.json({ limit: "10mb" })); // Increase payload limit for file uploads
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Request logging middleware
@@ -120,7 +103,6 @@ app.use((req, res, next) => {
   console.log(`   Origin: ${req.headers.origin || 'No origin header'}`);
   console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 60) || 'No user agent'}`);
   
-  // Log CORS headers for debugging
   if (req.method === 'OPTIONS') {
     console.log(`   CORS Preflight Request`);
   }
@@ -156,9 +138,16 @@ app.get("/", (req, res) => {
     database: dbConnection ? "Connected ✅" : "Disconnected ❌",
     cors: {
       enabled: true,
-      allowed_origins: allowedOrigins.map(o => o.toString()),
+      allowed_origins: [
+        "http://localhost:3000",
+        "https://agentic-system-frontend.vercel.app",
+        "https://agentic-system-front-end.vercel.app",
+        "https://agentic-system-1.onrender.com",
+        "https://agentic-system-frontend-67k3.vercel.app",
+        "All Vercel *.vercel.app domains"
+      ],
       request_origin: origin || "No origin header",
-      status: origin ? "Checking..." : "No origin to check"
+      status: "Configured ✅"
     },
     endpoints: {
       auth: {
@@ -213,7 +202,14 @@ app.get("/api/health", async (req, res) => {
       },
       cors: {
         status: "configured",
-        allowed_origins: allowedOrigins.map(o => o.toString()),
+        allowed_patterns: [
+          "http://localhost:3000",
+          "https://agentic-system-frontend.vercel.app",
+          "https://agentic-system-front-end.vercel.app",
+          "https://agentic-system-1.onrender.com",
+          "https://agentic-system-frontend-67k3.vercel.app",
+          "/^https:\\/\\/agentic-system-[\\w-]+\\.vercel\\.app$/ (all Vercel domains)"
+        ],
         request_origin: origin || "No origin header",
         access_control: "Allowed ✅ (This request passed CORS)"
       },
@@ -222,7 +218,7 @@ app.get("/api/health", async (req, res) => {
         heap_total: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)} MB`,
         heap_used: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`
       },
-      note: "CORS is properly configured for all Vercel preview deployments"
+      note: "CORS is properly configured for ALL Vercel preview deployments including front, frontend, and front-end variations"
     });
   } catch (error) {
     res.status(500).json({
@@ -245,28 +241,22 @@ app.get("/api/test", (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   
-  // Check if origin would be allowed
-  const isAllowed = !origin || allowedOrigins.some(allowed => {
-    if (typeof allowed === 'string') return allowed === origin;
-    if (allowed instanceof RegExp) return allowed.test(origin);
-    return false;
-  }) || (origin && origin.includes('agentic-system-frontend') && origin.includes('.vercel.app'));
+  // Check if origin would be allowed - SIMPLIFIED
+  const isAllowed = !origin || 
+    origin.includes('localhost') || 
+    origin.includes('agentic-system-1.onrender.com') ||
+    (origin.includes('agentic-system') && origin.includes('.vercel.app'));
   
   res.json({
     success: true,
     message: "✅ Backend is working perfectly!",
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toLocaleString(),
     request_details: {
       method: req.method,
       url: req.originalUrl,
       origin: origin || "No origin header",
       cors_status: isAllowed ? "Allowed ✅" : "Would be blocked ❌",
-      user_agent: req.headers['user-agent']?.substring(0, 80) || "Unknown",
-      headers_received: {
-        origin: req.headers.origin,
-        host: req.headers.host,
-        'user-agent': req.headers['user-agent']?.substring(0, 50)
-      }
+      user_agent: req.headers['user-agent']?.substring(0, 80) || "Unknown"
     },
     server_info: {
       url: process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 5000}`,
@@ -275,10 +265,12 @@ app.get("/api/test", (req, res) => {
       cors_enabled: true
     },
     cors_configuration: {
-      allowed_origins: allowedOrigins.map(o => o.toString()),
-      special_rules: [
-        "All Vercel preview deployments automatically allowed",
-        "Pattern matching for PR/preview URLs enabled"
+      note: "ALL Vercel domains with 'agentic-system' prefix are automatically allowed",
+      patterns: [
+        "agentic-system-front.vercel.app",
+        "agentic-system-frontend.vercel.app", 
+        "agentic-system-front-end.vercel.app",
+        "agentic-system-*-srilus-projects.vercel.app"
       ]
     },
     next_steps: [
@@ -300,7 +292,7 @@ app.post("/api/demo/register", (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   
-  // Generate a demo token (not for production use)
+  // Generate a demo token
   const demoToken = `demo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
   res.json({
@@ -374,18 +366,13 @@ app.use((err, req, res, next) => {
       message: "🛡️ CORS Policy Error",
       error: err.message,
       your_origin: origin || "No origin header",
-      allowed_origins: allowedOrigins.map(o => o.toString()),
       common_solutions: [
-        "1. Your frontend origin is not in the allowed list",
-        "2. Make sure your frontend URL matches one of the allowed patterns",
-        "3. Vercel preview URLs should be automatically allowed",
+        "1. Your frontend origin must contain 'agentic-system'",
+        "2. Your frontend must be a *.vercel.app domain",
+        "3. All Vercel preview URLs are automatically allowed",
         "4. Check console logs for CORS debugging information"
       ],
-      troubleshooting: {
-        step1: "Check if your frontend URL contains 'agentic-system-frontend'",
-        step2: "Check if your frontend URL ends with '.vercel.app'",
-        step3: "If not, add your exact frontend URL to allowedOrigins array"
-      }
+      troubleshooting: "If you see this error, please share the exact URL with the development team"
     });
   }
 
@@ -395,8 +382,7 @@ app.use((err, req, res, next) => {
     message: "❌ Server Error",
     error: process.env.NODE_ENV === "development" ? err.message : "Internal server error",
     ...(process.env.NODE_ENV === "development" && { 
-      stack: err.stack,
-      details: err 
+      stack: err.stack
     })
   });
 });
@@ -418,11 +404,14 @@ const server = app.listen(PORT, () => {
   ✅ CORS ALLOWED ORIGINS:
       1. http://localhost:3000
       2. https://agentic-system-frontend.vercel.app
-      3. https://agentic-system-1.onrender.com
-      4. https://agentic-system-frontend-67k3.vercel.app
-      5. All Vercel preview deployments matching:
-         - ^https://agentic-system-frontend-[\\w-]+\\.vercel\\.app$
-         - ^https://agentic-system-frontend-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\\.vercel\\.app$
+      3. https://agentic-system-front-end.vercel.app
+      4. https://agentic-system-1.onrender.com
+      5. https://agentic-system-frontend-67k3.vercel.app
+      6. ALL Vercel domains matching:
+         - agentic-system-front.*.vercel.app
+         - agentic-system-frontend.*.vercel.app
+         - agentic-system-front-end.*.vercel.app
+         - agentic-system-*-srilus-projects.vercel.app
       
   📍 TEST ENDPOINTS:
       1. ${RENDER_URL}/api/health
@@ -435,7 +424,7 @@ const server = app.listen(PORT, () => {
       
   ⚡ QUICK START:
       1. Test API: curl ${RENDER_URL}/api/health
-      2. Check CORS: curl -H "Origin: https://agentic-system-frontend-67k3.vercel.app" ${RENDER_URL}/api/test
+      2. Check CORS: curl -H "Origin: https://agentic-system-front-dqkbwu21t-srilus-projects.vercel.app" ${RENDER_URL}/api/test
       3. Register: curl -X POST ${RENDER_URL}/api/auth/register -H "Content-Type: application/json" -d '{"name":"Test","email":"test@test.com","password":"Test@123"}'
       
   ================================================
@@ -466,24 +455,11 @@ process.on("unhandledRejection", (err, promise) => {
   console.error("❌ Unhandled Rejection at:", promise);
   console.error("❌ Error:", err.message);
   console.error("❌ Stack:", err.stack);
-  
-  // In production, you might want to restart the server
-  if (process.env.NODE_ENV === "production") {
-    server.close(() => {
-      console.log("🔄 Restarting server due to unhandled rejection...");
-      process.exit(1);
-    });
-  }
 });
 
 // Handle uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("💥 Uncaught Exception:", err.message);
   console.error("💥 Stack:", err.stack);
-  
-  // Graceful shutdown
-  server.close(() => {
-    console.log("🛑 Server closed due to uncaught exception");
-    process.exit(1);
-  });
+  process.exit(1);
 });
