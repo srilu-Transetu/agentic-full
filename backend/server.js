@@ -17,11 +17,13 @@ const app = express();
 // ==================== CORS CONFIGURATION ====================
 // Allow specific origins for security
 const allowedOrigins = [
-  "http://localhost:3000",                    // Local development
-  "https://agentic-system-frontend.vercel.app", // Your main Vercel frontend
-  "https://agentic-system-1.onrender.com",    // Your Render backend itself
-  // Patterns for Vercel preview deployments
-  "https://agentic-system-frontend-67k3.vercel.app", // Main preview domain
+  "http://localhost:3000",
+  "https://agentic-system-frontend.vercel.app",    // Without dash
+  "https://agentic-system-front-end.vercel.app",   // ← ADD THIS (WITH DASH)
+  "https://agentic-system-1.onrender.com",
+  "https://agentic-system-frontend-67k3.vercel.app",
+  // ... keep the rest
+ // Main preview domain
   /^https:\/\/agentic-system-frontend-[\w-]+\.vercel\.app$/, // Pattern for all preview URLs
   /^https:\/\/agentic-system-frontend-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/ // PR previews
 ];
