@@ -20,6 +20,8 @@ export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
+  // Get backend URL from environment or use Render URL
+  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'https://agentic-system-1.onrender.com/api'
 
   // Check for success messages
   useEffect(() => {
@@ -35,7 +37,35 @@ export default function LoginPage() {
       setSuccessMessage('Account created successfully! Please login.')
       toast.success('Account created successfully!')
     }
-  }, [searchParams])
+
+    // Check if user is already logged in
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token')
+      const user = localStorage.getItem('user')
+      if (token && user) {
+        // User is already logged in, redirect to dashboard
+        router.push('/dashboard')
+      }
+    }
+  }, [searchParams, router])
+
+  // Check backend health on component mount
+  useEffect(() => {
+    checkBackendHealth()
+  }, [])
+
+  const checkBackendHealth = async () => {
+    try {
+      setBackendStatus('checking')
+      console.log('🔍 Checking backend health...')
+      const health = await checkHealth()
+      console.log('✅ Backend health check:', health)
+      setBackendStatus('connected')
+    } catch (error) {
+      console.error('❌ Backend health check failed:', error)
+      setBackendStatus('disconnected')
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -45,23 +75,23 @@ export default function LoginPage() {
 
     try {
       console.log('🔄 Attempting login...')
-      
+      console.log('📡 Backend URL:', BACKEND_URL)
+
       // Check backend status first
       if (backendStatus === 'disconnected') {
         try {
-          await checkHealth()
-          setBackendStatus('connected')
+          await checkBackendHealth()
         } catch (healthError) {
           console.error('❌ Backend connection failed:', healthError)
           setError(`
             Cannot connect to the server. Please check:
-            1. Backend server is running (port 5000)
-            2. No CORS issues (check browser console)
+            1. Backend server is running
+            2. CORS is properly configured
             3. Network connection is working
-            4. Try: cd backend && npm run dev
             
-            Backend URL: ${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}
+            Backend URL: ${BACKEND_URL}
           `)
+          toast.error('Cannot connect to server')
           setLoading(false)
           return
         }
@@ -75,31 +105,47 @@ export default function LoginPage() {
         password: formData.password
       })
 
-      console.log('✅ Login successful:', response)
+      console.log('✅ Login API response:', response)
 
       if (response.success) {
+        console.log('✅ Login successful, user data:', response.user)
+        console.log('✅ Token saved:', response.token ? 'Yes' : 'No')
+        
         setSuccessMessage('Login successful! Redirecting...')
         toast.success('Welcome to Agentic System!')
         
-        setTimeout(() => {
-          router.push('/dashboard')
-        }, 1000)
+        // Check if token and user data are saved
+        if (typeof window !== 'undefined') {
+          const token = localStorage.getItem('token')
+          const user = localStorage.getItem('user')
+          console.log('✅ Local storage check - Token:', token ? 'Saved' : 'Not saved')
+          console.log('✅ Local storage check - User:', user ? 'Saved' : 'Not saved')
+        }
+        
+        // Redirect immediately instead of setTimeout
+        router.push('/dashboard')
       } else {
-        setError(response.message || 'Login failed')
+        setError(response.message || 'Login failed. Please try again.')
         toast.error(response.message || 'Login failed')
       }
     } catch (error) {
       console.error('🔥 Login error:', error)
       
+      // Detailed error logging
+      console.log('🔍 Error details:', {
+        message: error.message,
+        status: error.status,
+        data: error.data
+      })
+      
       if (error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
         setError(`
           Cannot connect to the server. Please check:
-          1. Backend server is running (port 5000)
+          1. Backend server is running
           2. CORS is properly configured
           3. Network connection is working
           
-          Backend URL: ${process.env.NEXT_PUBLIC_API_URL || 'Not configured'}
-          Local URL: http://localhost:5000
+          Backend URL: ${BACKEND_URL}
         `)
         toast.error('Cannot connect to server')
       } else if (error.message.includes('timeout')) {
@@ -108,6 +154,9 @@ export default function LoginPage() {
       } else if (error.message.includes('401') || error.message.includes('Invalid credentials')) {
         setError('Invalid email or password. Please try again.')
         toast.error('Invalid email or password')
+      } else if (error.data?.message) {
+        setError(error.data.message)
+        toast.error(error.data.message)
       } else {
         setError(`Login failed: ${error.message}`)
         toast.error('Login failed')
@@ -359,7 +408,10 @@ export default function LoginPage() {
                       <span className="font-medium">Password:</span> Demo@1234
                     </p>
                     <p className="text-xs text-blue-700">
-                      <span className="font-medium">Mode:</span> {backendStatus === 'connected' ? 'Real Backend' : 'Demo Mode'}
+                      <span className="font-medium">Backend:</span> {backendStatus === 'connected' ? 'Connected ✅' : 'Demo Mode ⚠️'}
+                    </p>
+                    <p className="text-xs text-blue-700">
+                      <span className="font-medium">URL:</span> {BACKEND_URL}
                     </p>
                   </div>
                 </div>

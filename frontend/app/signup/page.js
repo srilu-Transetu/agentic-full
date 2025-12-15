@@ -23,6 +23,9 @@ export default function SignupPage() {
   const [showPrivacyModal, setShowPrivacyModal] = useState(false)
   const router = useRouter()
 
+  // Get backend URL from environment or use Render URL
+  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'https://agentic-system-1.onrender.com/api'
+
   // Password validation
   const validatePassword = (password) => {
     const requirements = {
@@ -36,83 +39,90 @@ export default function SignupPage() {
 
   const passwordRequirements = validatePassword(formData.password)
 
-const handleSubmit = async (e) => {
-  e.preventDefault()
-  setError('')
-  setSuccess('')
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setSuccess('')
 
-  // Validation
-  if (formData.password !== formData.confirmPassword) {
-    setError('Passwords do not match')
-    toast.error('❌ Passwords do not match')
-    return
-  }
+    // Validation
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match')
+      toast.error('❌ Passwords do not match')
+      return
+    }
 
-  // Check all password requirements
-  const requirements = validatePassword(formData.password)
-  const allValid = Object.values(requirements).every(req => req)
-  if (!allValid) {
-    setError('Please meet all password requirements')
-    toast.error('⚠️ Please meet all password requirements')
-    return
-  }
+    // Check all password requirements
+    const requirements = validatePassword(formData.password)
+    const allValid = Object.values(requirements).every(req => req)
+    if (!allValid) {
+      setError('Please meet all password requirements')
+      toast.error('⚠️ Please meet all password requirements')
+      return
+    }
 
-  setLoading(true)
+    setLoading(true)
 
-  try {
-    console.log('📝 Signup attempt for:', formData.email)
-    
-    // Use the imported authAPI from services
-    const response = await authAPI.register({
-      name: formData.name,
-      email: formData.email,
-      password: formData.password,
-      confirmPassword: formData.confirmPassword  // Make sure to send this
-    })
-
-    console.log('✅ Signup successful:', response)
-    
-    if (response.success) {
-      setSuccess(response.message || 'Account created successfully! Welcome to Agentic System.')
+    try {
+      console.log('📝 Signup attempt for:', formData.email)
+      console.log('📡 Backend URL:', BACKEND_URL)
       
-      toast.success('🎉 Account created successfully!')
-      
-      // Redirect with success parameter
-      setTimeout(() => {
-        router.push('/dashboard?signupSuccess=true')
-      }, 1500)
+      // Use the imported authAPI from services
+      const response = await authAPI.register({
+        name: formData.name,
+        email: formData.email,
+        password: formData.password,
+        confirmPassword: formData.confirmPassword
+      })
 
-    } else {
-      // Show detailed error if available
-      let errorMessage = response.message || 'Signup failed. Please try again.'
+      console.log('✅ Signup API response:', response)
       
-      // Check if there are validation errors
-      if (response.errors && Array.isArray(response.errors)) {
-        errorMessage = response.errors.map(err => `${err.field}: ${err.message}`).join(', ')
+      if (response.success) {
+        setSuccess(response.message || 'Account created successfully! Welcome to Agentic System.')
+        
+        toast.success('🎉 Account created successfully!')
+        
+        // Check if token and user data are saved
+        if (typeof window !== 'undefined') {
+          const token = localStorage.getItem('token')
+          const user = localStorage.getItem('user')
+          console.log('✅ Local storage check - Token:', token ? 'Saved' : 'Not saved')
+          console.log('✅ Local storage check - User:', user ? 'Saved' : 'Not saved')
+        }
+        
+        // Redirect immediately to dashboard
+        router.push('/dashboard')
+        
+      } else {
+        // Show detailed error if available
+        let errorMessage = response.message || 'Signup failed. Please try again.'
+        
+        // Check if there are validation errors
+        if (response.errors && Array.isArray(response.errors)) {
+          errorMessage = response.errors.map(err => `${err.field}: ${err.message}`).join(', ')
+        }
+        
+        setError(errorMessage)
+        toast.error('❌ ' + errorMessage)
+      }
+
+    } catch (err) {
+      console.error('❌ Signup error:', err)
+      
+      let errorMessage = err.message || err.error || 'Signup failed. Please try again.'
+      
+      // Check if there are validation errors in response
+      if (err.data?.errors) {
+        errorMessage = err.data.errors.map(err => `${err.field}: ${err.message}`).join(', ')
+      } else if (err.data?.message) {
+        errorMessage = err.data.message
       }
       
       setError(errorMessage)
       toast.error('❌ ' + errorMessage)
+    } finally {
+      setLoading(false)
     }
-
-  } catch (err) {
-    console.error('❌ Signup error:', err)
-    
-    let errorMessage = err.message || err.error || 'Signup failed. Please try again.'
-    
-    // Check if there are validation errors in response
-    if (err.data?.errors) {
-      errorMessage = err.data.errors.map(err => `${err.field}: ${err.message}`).join(', ')
-    } else if (err.data?.message) {
-      errorMessage = err.data.message
-    }
-    
-    setError(errorMessage)
-    toast.error('❌ ' + errorMessage)
-  } finally {
-    setLoading(false)
   }
-}
 
   const handleChange = (e) => {
     setFormData({
@@ -571,7 +581,7 @@ const handleSubmit = async (e) => {
                       • Data will be saved to MongoDB
                     </p>
                     <p className="text-xs text-blue-700">
-                      • Works in demo mode if backend is offline
+                      • Backend URL: {BACKEND_URL}
                     </p>
                   </div>
                 </div>
