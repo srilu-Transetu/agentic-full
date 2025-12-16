@@ -5,6 +5,8 @@ const connectDB = require("./config/db");
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const mongoose = require("mongoose");
+const User = require("./models/User");
 
 // Load environment variables
 dotenv.config();
@@ -19,7 +21,6 @@ const { protect } = require('./middleware/auth');
 const app = express();
 
 // ==================== CORS CONFIGURATION ====================
-// Universal CORS configuration for all Vercel URLs
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, or same-origin)
@@ -27,7 +28,6 @@ app.use(cors({
       return callback(null, true);
     }
 
-    // Debug logging
     console.log(`🌐 CORS checking origin: ${origin}`);
     
     // List of ALL allowed origins and patterns
@@ -39,6 +39,10 @@ app.use(cors({
       "https://agentic-system-1.onrender.com",
       "https://agentic-system-frontend-67k3.vercel.app",
       
+      // Your actual frontend domains
+      "https://ai-chartbot-frontend.vercel.app",
+      "https://ai-chartbot-frontend-mkjqcwqdg-srilus-projects.vercel.app",
+      
       // Vercel patterns - match ALL variations
       /^https:\/\/agentic-system-front(end|-end|-)[\w-]*\.vercel\.app$/,
       /^https:\/\/agentic-system-front(end|-end|-)[a-zA-Z0-9-]*\.vercel\.app$/,
@@ -47,7 +51,15 @@ app.use(cors({
       // Catch-all for any agentic-system Vercel domain
       /^https:\/\/agentic-system-[\w-]+\.vercel\.app$/,
       /^https:\/\/agentic-system-[a-zA-Z0-9-]+\.vercel\.app$/,
-      /^https:\/\/agentic-system-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/
+      /^https:\/\/agentic-system-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/,
+      
+      // Patterns for your actual frontend
+      /^https:\/\/ai-chartbot-frontend[\w-]*\.vercel\.app$/,
+      /^https:\/\/ai-chartbot-[a-zA-Z0-9-]+\.vercel\.app$/,
+      
+      // Final catch-all for ANY Vercel domain from your projects
+      /^https:\/\/(agentic-system|ai-chartbot)-[a-zA-Z0-9-]+\.vercel\.app$/,
+      /^https:\/\/(agentic-system|ai-chartbot)-[a-zA-Z0-9-]+-[a-zA-Z0-9-]+-srilus-projects\.vercel\.app$/
     ];
 
     // Check if origin matches any pattern
@@ -67,8 +79,8 @@ app.use(cors({
     if (isAllowed) {
       callback(null, true);
     } else {
-      // Final fallback: If it's a Vercel domain with agentic-system, allow it
-      if (origin.includes('agentic-system') && origin.includes('.vercel.app')) {
+      // Final fallback: If it's a Vercel domain, allow it for development
+      if (origin.includes('.vercel.app')) {
         console.log(`✅ Allowing Vercel domain (fallback): ${origin}`);
         return callback(null, true);
       }
@@ -94,8 +106,6 @@ app.use(cors({
   preflightContinue: false
 }));
 
-// Remove the manual app.options("*") handler - CORS middleware handles it
-
 // ==================== MIDDLEWARE ====================
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -117,7 +127,9 @@ app.use((req, res, next) => {
 // ==================== ROUTES ====================
 app.use("/api/auth", authRoutes);
 
-// Save or update a chat
+// ==================== CHAT ENDPOINTS ====================
+
+// Save or update a chat IN USER'S chatHistory
 app.post("/api/auth/chats", protect, async (req, res) => {
   try {
     const { chatId, title, messages, files, date, time } = req.body;
@@ -130,20 +142,18 @@ app.post("/api/auth/chats", protect, async (req, res) => {
       });
     }
 
-    // Set CORS headers
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
+    // Check if chatId is provided
+    if (!chatId) {
+      return res.status(400).json({
+        success: false,
+        message: "chatId is required"
+      });
     }
 
-    // Create or update chat
+    // Prepare chat data
     const chatData = {
-      chatId,
-      userId,
+      chatId: chatId, // REQUIRED field
       title: title || 'New Chat',
-      messages: messages || [],
-      files: files || [],
       date: date || new Date().toLocaleDateString('en-US', { 
         month: 'short', 
         day: 'numeric' 
@@ -152,39 +162,55 @@ app.post("/api/auth/chats", protect, async (req, res) => {
         hour: '2-digit', 
         minute: '2-digit' 
       }),
+      messages: messages || [],
+      files: files || [],
       lastUpdated: new Date()
     };
 
-    const chat = await Chat.findOneAndUpdate(
-      { chatId, userId },
-      chatData,
-      { upsert: true, new: true }
-    );
+    // Update user's chatHistory
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Check if chat already exists
+    const existingChatIndex = user.chatHistory.findIndex(chat => chat.chatId === chatId);
+    
+    if (existingChatIndex > -1) {
+      // Update existing chat
+      user.chatHistory[existingChatIndex] = {
+        ...user.chatHistory[existingChatIndex].toObject(),
+        ...chatData
+      };
+    } else {
+      // Add new chat
+      user.chatHistory.push(chatData);
+    }
+
+    // Save user
+    await user.save();
 
     res.json({
       success: true,
       message: "Chat saved successfully",
-      chat: {
-        chatId: chat.chatId,
-        title: chat.title,
-        messages: chat.messages,
-        files: chat.files,
-        date: chat.date,
-        time: chat.time,
-        lastUpdated: chat.lastUpdated
-      }
+      chat: chatData
     });
   } catch (error) {
     console.error('Save chat error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to save chat",
-      error: error.message
+      error: error.message,
+      details: error.errors ? Object.keys(error.errors) : []
     });
   }
 });
 
-// Get all chats for current user
+// Get all chats for current user FROM USER'S chatHistory
 app.get("/api/auth/chats", protect, async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -196,29 +222,24 @@ app.get("/api/auth/chats", protect, async (req, res) => {
       });
     }
 
-    // Set CORS headers
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
+    const user = await User.findById(userId).select('chatHistory');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
     }
 
-    const chats = await Chat.find({ userId })
-      .sort({ lastUpdated: -1 })
-      .select('chatId title messages files date time lastUpdated');
+    // Sort by lastUpdated descending
+    const sortedChats = user.chatHistory.sort((a, b) => 
+      new Date(b.lastUpdated) - new Date(a.lastUpdated)
+    );
 
     res.json({
       success: true,
       message: "Chats retrieved successfully",
-      chats: chats.map(chat => ({
-        chatId: chat.chatId,
-        title: chat.title,
-        messages: chat.messages,
-        files: chat.files,
-        date: chat.date,
-        time: chat.time,
-        lastUpdated: chat.lastUpdated
-      }))
+      chats: sortedChats
     });
   } catch (error) {
     console.error('Get chats error:', error);
@@ -230,7 +251,7 @@ app.get("/api/auth/chats", protect, async (req, res) => {
   }
 });
 
-// Delete a specific chat
+// Delete a specific chat FROM USER'S chatHistory
 app.delete("/api/auth/chats/:chatId", protect, async (req, res) => {
   try {
     const { chatId } = req.params;
@@ -243,21 +264,27 @@ app.delete("/api/auth/chats/:chatId", protect, async (req, res) => {
       });
     }
 
-    // Set CORS headers
-    const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
     }
 
-    const result = await Chat.findOneAndDelete({ chatId, userId });
-
-    if (!result) {
+    // Find and remove chat
+    const initialLength = user.chatHistory.length;
+    user.chatHistory = user.chatHistory.filter(chat => chat.chatId !== chatId);
+    
+    if (user.chatHistory.length === initialLength) {
       return res.status(404).json({
         success: false,
         message: "Chat not found"
       });
     }
+
+    await user.save();
 
     res.json({
       success: true,
@@ -415,7 +442,7 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
 // 4. Unified Chat Endpoint with Agentic AI
 app.post("/api/agentic/chat", async (req, res) => {
   try {
-    const { message, history = [], file_paths = {} } = req.body; // FIXED: Changed 'query' to 'message'
+    const { message, history = [], file_paths = {} } = req.body;
     
     // Set CORS headers explicitly
     const origin = req.headers.origin;
@@ -569,6 +596,7 @@ app.get("/", (req, res) => {
         "https://agentic-system-front-end.vercel.app",
         "https://agentic-system-1.onrender.com",
         "https://agentic-system-frontend-67k3.vercel.app",
+        "https://ai-chartbot-frontend.vercel.app",
         "All Vercel *.vercel.app domains"
       ],
       request_origin: origin || "No origin header",
@@ -600,10 +628,27 @@ app.get("/", (req, res) => {
   });
 });
 
+// Helper function for uptime formatting
+function formatUptime(seconds) {
+  const days = Math.floor(seconds / (24 * 60 * 60));
+  const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
+  const minutes = Math.floor((seconds % (60 * 60)) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m ${secs}s`;
+  } else if (hours > 0) {
+    return `${hours}h ${minutes}m ${secs}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  } else {
+    return `${secs}s`;
+  }
+}
+
 // Enhanced health check endpoint
 app.get("/api/health", async (req, res) => {
   try {
-    const mongoose = require("mongoose");
     const dbStatus = mongoose.connection.readyState === 1 ? "Connected ✅" : "Disconnected ❌";
     
     const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 5000}`;
@@ -646,7 +691,8 @@ app.get("/api/health", async (req, res) => {
           "https://agentic-system-front-end.vercel.app",
           "https://agentic-system-1.onrender.com",
           "https://agentic-system-frontend-67k3.vercel.app",
-          "/^https:\\/\\/agentic-system-[\\w-]+\\.vercel\\.app$/ (all Vercel domains)"
+          "https://ai-chartbot-frontend.vercel.app",
+          "All Vercel *.vercel.app domains"
         ],
         request_origin: origin || "No origin header",
         access_control: "Allowed ✅ (This request passed CORS)"
@@ -679,11 +725,12 @@ app.get("/api/test", (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   
-  // Check if origin would be allowed - SIMPLIFIED
+  // Check if origin would be allowed
   const isAllowed = !origin || 
     origin.includes('localhost') || 
     origin.includes('agentic-system-1.onrender.com') ||
-    (origin.includes('agentic-system') && origin.includes('.vercel.app'));
+    origin.includes('ai-chartbot-frontend.vercel.app') ||
+    (origin.includes('.vercel.app'));
   
   res.json({
     success: true,
@@ -709,12 +756,11 @@ app.get("/api/test", (req, res) => {
       database: "connected"
     },
     cors_configuration: {
-      note: "ALL Vercel domains with 'agentic-system' prefix are automatically allowed",
+      note: "ALL Vercel domains are automatically allowed",
       patterns: [
-        "agentic-system-front.vercel.app",
-        "agentic-system-frontend.vercel.app", 
-        "agentic-system-front-end.vercel.app",
-        "agentic-system-*-srilus-projects.vercel.app"
+        "agentic-system-*.vercel.app",
+        "ai-chartbot-*.vercel.app",
+        "localhost:3000"
       ]
     },
     next_steps: [
@@ -818,10 +864,9 @@ app.use((err, req, res, next) => {
       error: err.message,
       your_origin: origin || "No origin header",
       common_solutions: [
-        "1. Your frontend origin must contain 'agentic-system'",
-        "2. Your frontend must be a *.vercel.app domain",
-        "3. All Vercel preview URLs are automatically allowed",
-        "4. Check console logs for CORS debugging information"
+        "1. Your frontend origin must be a *.vercel.app domain",
+        "2. All Vercel preview URLs are automatically allowed",
+        "3. Check console logs for CORS debugging information"
       ],
       troubleshooting: "If you see this error, please share the exact URL with the development team"
     });
@@ -835,6 +880,17 @@ app.use((err, req, res, next) => {
       error: err.message,
       allowed_types: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv", ".eml", ".msg"],
       max_size: "10MB"
+    });
+  }
+
+  // Handle validation errors (like chatId required)
+  if (err.name === "ValidationError") {
+    return res.status(400).json({
+      success: false,
+      message: "📝 Validation Error",
+      error: err.message,
+      fields: Object.keys(err.errors || {}),
+      details: err.errors
     });
   }
 
@@ -861,19 +917,14 @@ const server = app.listen(PORT, () => {
       Server URL:    ${RENDER_URL}
       Port:          ${PORT}
       Environment:   ${process.env.NODE_ENV || 'development'}
-      Frontend URL:  ${process.env.FRONTEND_URL || 'https://agentic-system-frontend.vercel.app'}
       
   ✅ CORS ALLOWED ORIGINS:
       1. http://localhost:3000
-      2. https://agentic-system-frontend.vercel.app
-      3. https://agentic-system-front-end.vercel.app
-      4. https://agentic-system-1.onrender.com
-      5. https://agentic-system-frontend-67k3.vercel.app
-      6. ALL Vercel domains matching:
-         - agentic-system-front.*.vercel.app
-         - agentic-system-frontend.*.vercel.app
-         - agentic-system-front-end.*.vercel.app
-         - agentic-system-*-srilus-projects.vercel.app
+      2. https://ai-chartbot-frontend.vercel.app (YOUR FRONTEND)
+      3. https://agentic-system-frontend.vercel.app
+      4. https://agentic-system-front-end.vercel.app
+      5. https://agentic-system-1.onrender.com
+      6. ALL *.vercel.app domains
       
   📍 AUTH ENDPOINTS:
       1. ${RENDER_URL}/api/auth/register (POST)
@@ -881,9 +932,9 @@ const server = app.listen(PORT, () => {
       3. ${RENDER_URL}/api/auth/me (GET)
       4. ${RENDER_URL}/api/auth/changepassword (PUT)
       
-  📍 CHAT ENDPOINTS:
-      1. ${RENDER_URL}/api/auth/chats (POST) - Save chat
-      2. ${RENDER_URL}/api/auth/chats (GET) - Get all chats
+  📍 CHAT ENDPOINTS (FIXED):
+      1. ${RENDER_URL}/api/auth/chats (POST) - Save chat to User model
+      2. ${RENDER_URL}/api/auth/chats (GET) - Get user's chatHistory
       3. ${RENDER_URL}/api/auth/chats/:chatId (DELETE) - Delete chat
       
   📍 AGENTIC AI ENDPOINTS:
@@ -898,7 +949,6 @@ const server = app.listen(PORT, () => {
       
   🗄️  DATABASE:
       Status: ${process.env.MONGODB_URI ? 'Connected ✅' : 'Not configured ❌'}
-      Host: ${process.env.MONGODB_URI ? 'MongoDB Atlas' : 'Unknown'}
       
   🤖 AGENTIC AI STATUS:
       Systems: 3 agents (document_processor, data_analyzer, chat_assistant)
@@ -914,16 +964,6 @@ const server = app.listen(PORT, () => {
   ================================================
   `);
 });
-
-// ==================== HELPER FUNCTIONS ====================
-function formatUptime(seconds) {
-  const days = Math.floor(seconds / (24 * 60 * 60));
-  const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
-  const minutes = Math.floor((seconds % (60 * 60)) / 60);
-  const secs = Math.floor(seconds % 60);
-  
-  return `${days}d ${hours}h ${minutes}m ${secs}s`;
-}
 
 // Handle graceful shutdown
 process.on("SIGTERM", () => {
