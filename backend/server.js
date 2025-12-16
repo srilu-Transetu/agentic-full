@@ -14,6 +14,7 @@ const dbConnection = connectDB();
 
 // Route files
 const authRoutes = require("./routes/authRoutes");
+const { protect } = require('./middleware/auth');
 
 const app = express();
 
@@ -115,6 +116,162 @@ app.use((req, res, next) => {
 
 // ==================== ROUTES ====================
 app.use("/api/auth", authRoutes);
+
+// Save or update a chat
+app.post("/api/auth/chats", protect, async (req, res) => {
+  try {
+    const { chatId, title, messages, files, date, time } = req.body;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required"
+      });
+    }
+
+    // Set CORS headers
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+
+    // Create or update chat
+    const chatData = {
+      chatId,
+      userId,
+      title: title || 'New Chat',
+      messages: messages || [],
+      files: files || [],
+      date: date || new Date().toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric' 
+      }),
+      time: time || new Date().toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      }),
+      lastUpdated: new Date()
+    };
+
+    const chat = await Chat.findOneAndUpdate(
+      { chatId, userId },
+      chatData,
+      { upsert: true, new: true }
+    );
+
+    res.json({
+      success: true,
+      message: "Chat saved successfully",
+      chat: {
+        chatId: chat.chatId,
+        title: chat.title,
+        messages: chat.messages,
+        files: chat.files,
+        date: chat.date,
+        time: chat.time,
+        lastUpdated: chat.lastUpdated
+      }
+    });
+  } catch (error) {
+    console.error('Save chat error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to save chat",
+      error: error.message
+    });
+  }
+});
+
+// Get all chats for current user
+app.get("/api/auth/chats", protect, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required"
+      });
+    }
+
+    // Set CORS headers
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+
+    const chats = await Chat.find({ userId })
+      .sort({ lastUpdated: -1 })
+      .select('chatId title messages files date time lastUpdated');
+
+    res.json({
+      success: true,
+      message: "Chats retrieved successfully",
+      chats: chats.map(chat => ({
+        chatId: chat.chatId,
+        title: chat.title,
+        messages: chat.messages,
+        files: chat.files,
+        date: chat.date,
+        time: chat.time,
+        lastUpdated: chat.lastUpdated
+      }))
+    });
+  } catch (error) {
+    console.error('Get chats error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch chats",
+      error: error.message
+    });
+  }
+});
+
+// Delete a specific chat
+app.delete("/api/auth/chats/:chatId", protect, async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required"
+      });
+    }
+
+    // Set CORS headers
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+
+    const result = await Chat.findOneAndDelete({ chatId, userId });
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Chat not found"
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Chat deleted successfully"
+    });
+  } catch (error) {
+    console.error('Delete chat error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete chat",
+      error: error.message
+    });
+  }
+});
 
 // ==================== AGENTIC AI SETUP ====================
 // Setup file upload for Agentic AI
@@ -258,7 +415,7 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
 // 4. Unified Chat Endpoint with Agentic AI
 app.post("/api/agentic/chat", async (req, res) => {
   try {
-    const { query, history = [], file_paths = {} } = req.body;
+    const { message, history = [], file_paths = {} } = req.body; // FIXED: Changed 'query' to 'message'
     
     // Set CORS headers explicitly
     const origin = req.headers.origin;
@@ -267,10 +424,10 @@ app.post("/api/agentic/chat", async (req, res) => {
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     
-    if (!query && Object.keys(file_paths).length === 0) {
+    if (!message && Object.keys(file_paths).length === 0) {
       return res.status(400).json({ 
         success: false, 
-        error: "Query or file_paths required" 
+        error: "Message or file_paths required" 
       });
     }
     
@@ -289,10 +446,10 @@ app.post("/api/agentic/chat", async (req, res) => {
       reasoning = `Processing ${fileList.length} file(s): ${fileList.join(', ')}`;
       confidence = 85;
       
-      // Generate response based on query
-      if (query.toLowerCase().includes('extract') || query.toLowerCase().includes('read') || query.toLowerCase().includes('analyze')) {
+      // Generate response based on message
+      if (message && (message.toLowerCase().includes('extract') || message.toLowerCase().includes('read') || message.toLowerCase().includes('analyze'))) {
         response = `✅ I've received your ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI can perform the following operations:\n1. **Extract data** and provide summaries\n2. **Analyze content** and identify patterns\n3. **Generate insights** from your data\n4. **Modify files** based on your instructions\n\nPlease tell me specifically what you'd like me to do with these files.`;
-      } else if (query.toLowerCase().includes('modify') || query.toLowerCase().includes('update') || query.toLowerCase().includes('edit')) {
+      } else if (message && (message.toLowerCase().includes('modify') || message.toLowerCase().includes('update') || message.toLowerCase().includes('edit'))) {
         response = `✅ I've received your ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI'm ready to make modifications. Please provide specific instructions for:\n1. What data to change\n2. New values or formats\n3. Any transformations needed\n\nI'll process the files and provide the updated versions.`;
       } else {
         response = `✅ I've successfully uploaded ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI'm ready to help you with:\n• Data extraction and analysis\n• Content summarization\n• File modifications\n• Pattern identification\n\nWhat would you like me to do with these files?`;
@@ -304,18 +461,18 @@ app.post("/api/agentic/chat", async (req, res) => {
       confidence = 95;
       
       // Simple AI response logic
-      const lowerQuery = query.toLowerCase();
+      const lowerMessage = message.toLowerCase();
       
-      if (lowerQuery.includes('hello') || lowerQuery.includes('hi') || lowerQuery.includes('hey')) {
+      if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
         response = `🤖 Hello! I'm your Agentic AI assistant. I can help you with data analysis, document processing, and answering questions. How can I assist you today?`;
-      } else if (lowerQuery.includes('help') || lowerQuery.includes('what can you do')) {
+      } else if (lowerMessage.includes('help') || lowerMessage.includes('what can you do')) {
         response = `🤖 I'm an Agentic AI system that can:\n\n1. **Answer questions** - Ask me anything!\n2. **Process files** - Upload documents for analysis (Excel, Word, PDF, etc.)\n3. **Extract data** - Get insights from your files\n4. **Generate insights** - Provide summaries and analysis\n5. **Modify documents** - Update content based on your instructions\n\nUpload a file or ask me a question to get started!`;
-      } else if (lowerQuery.includes('file') || lowerQuery.includes('upload') || lowerQuery.includes('document')) {
+      } else if (lowerMessage.includes('file') || lowerMessage.includes('upload') || lowerMessage.includes('document')) {
         response = `🤖 To process files:\n1. Click "Upload Files" button\n2. Select your documents\n3. Ask me to analyze or modify them\n\nI support:\n• **Excel** (.xlsx, .xls)\n• **Word** (.docx, .doc)\n• **PDF** (.pdf)\n• **Text** (.txt)\n• **Email** (.eml, .msg)\n• **CSV/JSON** (.csv, .json)\n\nOnce uploaded, I can analyze, extract data, or modify content.`;
-      } else if (lowerQuery.includes('agentic') || lowerQuery.includes('ai') || lowerQuery.includes('system')) {
+      } else if (lowerMessage.includes('agentic') || lowerMessage.includes('ai') || lowerMessage.includes('system')) {
         response = `🤖 I'm your Agentic AI System with multi-agent capabilities:\n\n• **Document Processor** - Reads and analyzes files\n• **Data Analyzer** - Extracts insights from data\n• **Chat Assistant** - Answers questions and provides help\n\nTry uploading a file to see my processing capabilities!`;
       } else {
-        response = `🤖 I've processed your query: "${query}"\n\nAs an Agentic AI, I can help you with:\n• Data analysis and insights\n• Document processing and extraction\n• Information summarization\n• Answering complex questions\n\nFeel free to ask anything or upload files for processing!`;
+        response = `🤖 I've processed your message: "${message}"\n\nAs an Agentic AI, I can help you with:\n• Data analysis and insights\n• Document processing and extraction\n• Information summarization\n• Answering complex questions\n\nFeel free to ask anything or upload files for processing!`;
       }
     }
     
@@ -338,7 +495,7 @@ app.post("/api/agentic/chat", async (req, res) => {
       conversation_log: [
         {
           role: 'user',
-          content: query || `Process ${fileList.join(', ')}`,
+          content: message || `Process ${fileList.join(', ')}`,
           timestamp: new Date().toISOString()
         },
         {
@@ -376,7 +533,7 @@ app.get("/api/agentic/test", (req, res) => {
     endpoints_tested: true,
     file_upload_ready: true,
     chat_processing_ready: true,
-    test_query: "Try: POST /api/agentic/chat with {query: 'Hello Agentic AI'}",
+    test_query: "Try: POST /api/agentic/chat with {message: 'Hello Agentic AI'}",
     note: "For file upload, use the frontend interface or POST /api/agentic/upload"
   });
 });
@@ -629,6 +786,7 @@ app.use("*", (req, res) => {
       "GET  /api/auth/me      - Get current user",
       "POST /api/auth/chats   - Save chat",
       "GET  /api/auth/chats   - Get all chats",
+      "DELETE /api/auth/chats/:chatId - Delete chat",
       "POST /api/demo/register - Demo registration (testing)"
     ],
     tip: "Check /api/health for all available endpoints"
@@ -717,15 +875,21 @@ const server = app.listen(PORT, () => {
          - agentic-system-front-end.*.vercel.app
          - agentic-system-*-srilus-projects.vercel.app
       
-  📍 AGENTIC AI ENDPOINTS:
-      1. ${RENDER_URL}/api/agentic/status
-      2. ${RENDER_URL}/api/agentic/upload (POST)
-      3. ${RENDER_URL}/api/agentic/chat (POST)
-      
   📍 AUTH ENDPOINTS:
       1. ${RENDER_URL}/api/auth/register (POST)
       2. ${RENDER_URL}/api/auth/login (POST)
       3. ${RENDER_URL}/api/auth/me (GET)
+      4. ${RENDER_URL}/api/auth/changepassword (PUT)
+      
+  📍 CHAT ENDPOINTS:
+      1. ${RENDER_URL}/api/auth/chats (POST) - Save chat
+      2. ${RENDER_URL}/api/auth/chats (GET) - Get all chats
+      3. ${RENDER_URL}/api/auth/chats/:chatId (DELETE) - Delete chat
+      
+  📍 AGENTIC AI ENDPOINTS:
+      1. ${RENDER_URL}/api/agentic/status
+      2. ${RENDER_URL}/api/agentic/upload (POST)
+      3. ${RENDER_URL}/api/agentic/chat (POST)
       
   📍 TEST ENDPOINTS:
       1. ${RENDER_URL}/api/health
@@ -744,7 +908,7 @@ const server = app.listen(PORT, () => {
   ⚡ QUICK START:
       1. Test API: curl ${RENDER_URL}/api/health
       2. Test Agentic AI: curl ${RENDER_URL}/api/agentic/status
-      3. Test Chat: curl -X POST ${RENDER_URL}/api/agentic/chat -H "Content-Type: application/json" -d '{"query":"Hello AI"}'
+      3. Test Chat: curl -X POST ${RENDER_URL}/api/agentic/chat -H "Content-Type: application/json" -d '{"message":"Hello AI"}'
       4. Register: curl -X POST ${RENDER_URL}/api/auth/register -H "Content-Type: application/json" -d '{"name":"Test","email":"test@test.com","password":"Test@123"}'
       
   ================================================
