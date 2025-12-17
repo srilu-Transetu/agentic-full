@@ -4,9 +4,17 @@ const dotenv = require("dotenv");
 const connectDB = require("./config/db");
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises;
+const fsSync = require('fs');
 const mongoose = require("mongoose");
 const User = require("./models/User");
+
+// File processing libraries
+const mammoth = require('mammoth');
+const pdf = require('pdf-parse');
+const xlsx = require('xlsx');
+const emailjs = require('emailjs');
+const cheerio = require('cheerio');
 
 // Load environment variables
 dotenv.config();
@@ -107,15 +115,23 @@ app.use(cors({
 }));
 
 // ==================== MIDDLEWARE ====================
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Request logging middleware
+// Enhanced request logging middleware
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${req.method} ${req.originalUrl}`);
   console.log(`   Origin: ${req.headers.origin || 'No origin header'}`);
-  console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 60) || 'No user agent'}`);
+  console.log(`   Content-Type: ${req.headers['content-type'] || 'No content-type'}`);
+  
+  if (req.method === 'POST' && req.originalUrl === '/api/agentic/chat') {
+    console.log(`   Chat request body preview:`, {
+      message: req.body?.message?.substring(0, 100),
+      fileCount: Object.keys(req.body?.file_paths || {}).length,
+      files: Object.keys(req.body?.file_paths || {})
+    });
+  }
   
   if (req.method === 'OPTIONS') {
     console.log(`   CORS Preflight Request`);
@@ -320,13 +336,257 @@ app.delete("/api/auth/chats/:chatId", protect, async (req, res) => {
   }
 });
 
+// ==================== FILE PROCESSING FUNCTIONS ====================
+
+// Helper function to read file content based on type
+async function readFileContent(filePath, filename) {
+  try {
+    const ext = path.extname(filename).toLowerCase();
+    console.log(`📖 Reading file: ${filename} (${ext}) from ${filePath}`);
+    
+    // Check if file exists
+    try {
+      await fs.access(filePath);
+    } catch (err) {
+      console.log(`❌ File not found: ${filePath}`);
+      return null;
+    }
+    
+    const stats = await fs.stat(filePath);
+    console.log(`✅ File stats: ${stats.size} bytes, modified: ${stats.mtime}`);
+    
+    switch (ext) {
+      case '.txt':
+      case '.csv':
+      case '.json':
+      case '.html':
+      case '.htm':
+        // Text files
+        const content = await fs.readFile(filePath, 'utf8');
+        return {
+          type: 'text',
+          content: content,
+          size: stats.size,
+          lines: content.split('\n').length,
+          words: content.split(/\s+/).length
+        };
+        
+      case '.pdf':
+        try {
+          // PDF files
+          const dataBuffer = await fs.readFile(filePath);
+          const pdfData = await pdf(dataBuffer);
+          return {
+            type: 'pdf',
+            content: pdfData.text,
+            size: stats.size,
+            pages: pdfData.numpages || 'Unknown',
+            lines: pdfData.text.split('\n').length,
+            words: pdfData.text.split(/\s+/).length
+          };
+        } catch (pdfError) {
+          console.log(`⚠️ PDF parsing error, using fallback: ${pdfError.message}`);
+          return {
+            type: 'pdf',
+            content: `PDF file: ${filename} (${formatFileSize(stats.size)})\n[PDF content extraction requires proper setup]`,
+            size: stats.size
+          };
+        }
+        
+      case '.docx':
+        try {
+          // Word documents
+          const docBuffer = await fs.readFile(filePath);
+          const result = await mammoth.extractRawText({ buffer: docBuffer });
+          return {
+            type: 'word',
+            content: result.value,
+            size: stats.size,
+            lines: result.value.split('\n').length,
+            words: result.value.split(/\s+/).length
+          };
+        } catch (docError) {
+          console.log(`⚠️ Word parsing error: ${docError.message}`);
+          return {
+            type: 'word',
+            content: `Word document: ${filename} (${formatFileSize(stats.size)})`,
+            size: stats.size
+          };
+        }
+        
+      case '.xlsx':
+      case '.xls':
+        try {
+          // Excel files
+          const workbook = xlsx.readFile(filePath);
+          let excelContent = '';
+          let totalRows = 0;
+          let totalColumns = 0;
+          
+          workbook.SheetNames.forEach((sheetName, index) => {
+            const worksheet = workbook.Sheets[sheetName];
+            const range = xlsx.utils.decode_range(worksheet['!ref']);
+            const rows = range.e.r - range.s.r + 1;
+            const cols = range.e.c - range.s.c + 1;
+            
+            excelContent += `Sheet ${index + 1}: ${sheetName}\n`;
+            excelContent += `Rows: ${rows}, Columns: ${cols}\n\n`;
+            
+            // Get first few rows as preview
+            const previewRows = Math.min(5, rows);
+            for (let i = 0; i < previewRows; i++) {
+              const row = [];
+              for (let j = 0; j < Math.min(5, cols); j++) {
+                const cellAddress = xlsx.utils.encode_cell({r: i, c: j});
+                const cell = worksheet[cellAddress];
+                row.push(cell ? cell.v : '');
+              }
+              excelContent += row.join('\t') + '\n';
+            }
+            excelContent += '\n';
+            
+            totalRows += rows;
+            totalColumns = Math.max(totalColumns, cols);
+          });
+          
+          return {
+            type: 'excel',
+            content: excelContent,
+            size: stats.size,
+            sheets: workbook.SheetNames.length,
+            totalRows: totalRows,
+            totalColumns: totalColumns
+          };
+        } catch (excelError) {
+          console.log(`⚠️ Excel parsing error: ${excelError.message}`);
+          return {
+            type: 'excel',
+            content: `Excel file: ${filename} (${formatFileSize(stats.size)})`,
+            size: stats.size
+          };
+        }
+        
+      default:
+        return {
+          type: 'unknown',
+          content: `File type: ${ext} (${formatFileSize(stats.size)})`,
+          size: stats.size
+        };
+    }
+  } catch (error) {
+    console.error(`❌ Error reading file ${filename}:`, error.message);
+    return {
+      type: 'error',
+      content: `Error reading file: ${error.message}`,
+      size: 0
+    };
+  }
+}
+
+// Helper function to analyze document content
+function analyzeDocumentContent(content, filename, query) {
+  if (!content || content.length === 0) {
+    return {
+      summary: `The document "${filename}" appears to be empty or could not be read.`,
+      insights: [],
+      statistics: { lines: 0, words: 0, characters: 0 }
+    };
+  }
+  
+  const lines = content.split('\n');
+  const words = content.split(/\s+/);
+  const characters = content.length;
+  
+  // Basic statistics
+  const statistics = {
+    lines: lines.length,
+    words: words.length,
+    characters: characters,
+    avgWordsPerLine: words.length / Math.max(lines.length, 1)
+  };
+  
+  // Extract key insights
+  const insights = [];
+  
+  // Check for common patterns
+  if (content.toLowerCase().includes('@')) {
+    const emailMatches = content.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+    if (emailMatches && emailMatches.length > 0) {
+      insights.push(`Contains ${emailMatches.length} email address(es)`);
+    }
+  }
+  
+  if (content.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/g)) {
+    insights.push('Contains date(s)');
+  }
+  
+  if (content.match(/\$\d+[\d,]*\.?\d*/g)) {
+    insights.push('Contains monetary values');
+  }
+  
+  if (content.match(/\b[A-Z][a-z]+ [A-Z][a-z]+\b/g)) {
+    insights.push('Contains proper names');
+  }
+  
+  // Generate summary based on content
+  let summary = '';
+  
+  if (query && (query.toLowerCase().includes('explain') || query.toLowerCase().includes('what is'))) {
+    const firstParagraph = content.substring(0, 500);
+    const sentences = content.split(/[.!?]+/);
+    
+    summary = `**Document Analysis for "${filename}":**\n\n`;
+    summary += `**Overview:** This document contains ${statistics.words} words across ${statistics.lines} lines.\n\n`;
+    
+    if (sentences.length > 0) {
+      summary += `**Key Content:** ${sentences[0]}. `;
+      if (sentences.length > 1) summary += `${sentences[1]}.`;
+    }
+    
+    if (insights.length > 0) {
+      summary += `\n\n**Insights:** ${insights.join(', ')}.`;
+    }
+    
+  } else if (query && query.toLowerCase().includes('summar')) {
+    const sentences = content.split(/[.!?]+/);
+    if (sentences.length <= 3) {
+      summary = content.substring(0, 300) + '...';
+    } else {
+      summary = `${sentences[0]}. ${sentences[1]}. ${sentences[Math.floor(sentences.length / 2)]}.`;
+    }
+  } else {
+    summary = `Document "${filename}" analyzed:\n`;
+    summary += `• Size: ${statistics.words} words, ${statistics.lines} lines\n`;
+    summary += `• Type: Based on content analysis\n`;
+    if (insights.length > 0) {
+      summary += `• Features: ${insights.join(', ')}\n`;
+    }
+  }
+  
+  return {
+    summary: summary,
+    insights: insights,
+    statistics: statistics,
+    preview: content.substring(0, 300) + (content.length > 300 ? '...' : '')
+  };
+}
+
+// Helper function to format file size
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 // ==================== AGENTIC AI SETUP ====================
 // Setup file upload for Agentic AI
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadDir = 'uploads/';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+    if (!fsSync.existsSync(uploadDir)) {
+      fsSync.mkdirSync(uploadDir, { recursive: true });
     }
     cb(null, uploadDir);
   },
@@ -341,7 +601,8 @@ const upload = multer({
   fileFilter: function (req, file, cb) {
     const allowedTypes = [
       '.xlsx', '.xls', '.docx', '.doc', '.pdf', 
-      '.txt', '.json', '.csv', '.eml', '.msg'
+      '.txt', '.json', '.csv', '.eml', '.msg',
+      '.html', '.htm'
     ];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowedTypes.includes(ext)) {
@@ -384,7 +645,7 @@ app.get("/api/agentic", (req, res) => {
       "Multi-format support",
       "Real-time processing"
     ],
-    supported_files: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv", ".eml", ".msg"],
+    supported_files: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv", ".eml", ".msg", ".html", ".htm"],
     max_file_size: "10MB"
   });
 });
@@ -436,6 +697,12 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     
+    console.log('✅ File uploaded:', {
+      name: req.file.originalname,
+      size: req.file.size,
+      path: req.file.path
+    });
+    
     res.json({
       success: true,
       message: "✅ File uploaded successfully",
@@ -459,10 +726,17 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
   }
 });
 
-// 4. Unified Chat Endpoint with Agentic AI
+// 4. Unified Chat Endpoint with REAL File Processing
 app.post("/api/agentic/chat", async (req, res) => {
   try {
     const { message, history = [], file_paths = {} } = req.body;
+    
+    console.log('📥 Chat request received:', { 
+      message: message?.substring(0, 100),
+      fileCount: Object.keys(file_paths).length,
+      files: Object.keys(file_paths),
+      filePaths: file_paths
+    });
     
     // Set CORS headers explicitly
     const origin = req.headers.origin;
@@ -486,23 +760,189 @@ app.post("/api/agentic/chat", async (req, res) => {
     let action = 'direct_response';
     let reasoning = '';
     let confidence = 90;
+    let fileAnalysis = [];
     
     if (hasFiles) {
-      // File processing logic
+      // FILE PROCESSING LOGIC - ACTUALLY READ AND ANALYZE FILES
       action = 'read';
       reasoning = `Processing ${fileList.length} file(s): ${fileList.join(', ')}`;
       confidence = 85;
       
-      // Generate response based on message
-      if (message && (message.toLowerCase().includes('extract') || message.toLowerCase().includes('read') || message.toLowerCase().includes('analyze'))) {
-        response = `✅ I've received your ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI can perform the following operations:\n1. **Extract data** and provide summaries\n2. **Analyze content** and identify patterns\n3. **Generate insights** from your data\n4. **Modify files** based on your instructions\n\nPlease tell me specifically what you'd like me to do with these files.`;
-      } else if (message && (message.toLowerCase().includes('modify') || message.toLowerCase().includes('update') || message.toLowerCase().includes('edit'))) {
-        response = `✅ I've received your ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI'm ready to make modifications. Please provide specific instructions for:\n1. What data to change\n2. New values or formats\n3. Any transformations needed\n\nI'll process the files and provide the updated versions.`;
-      } else {
-        response = `✅ I've successfully uploaded ${fileList.length} file(s): ${fileList.join(', ')}.\n\nI'm ready to help you with:\n• Data extraction and analysis\n• Content summarization\n• File modifications\n• Pattern identification\n\nWhat would you like me to do with these files?`;
+      console.log(`📁 Processing ${fileList.length} file(s):`, fileList);
+      
+      // Process each file
+      for (const [filename, filepath] of Object.entries(file_paths)) {
+        try {
+          // Extract actual path from "C:/uploads/..." format
+          let actualPath = filepath;
+          if (filepath.startsWith('C:/')) {
+            actualPath = filepath.replace('C:/', '').replace(/\//g, path.sep);
+          }
+          
+          console.log(`📖 Reading file: ${filename} from ${actualPath}`);
+          
+          // Read file content
+          const fileContent = await readFileContent(actualPath, filename);
+          
+          if (fileContent) {
+            // Analyze the content
+            const analysis = analyzeDocumentContent(fileContent.content, filename, message);
+            
+            fileAnalysis.push({
+              filename: filename,
+              status: 'success',
+              type: fileContent.type,
+              size: fileContent.size,
+              formattedSize: formatFileSize(fileContent.size),
+              content: fileContent.content,
+              analysis: analysis,
+              statistics: fileContent
+            });
+            
+            console.log(`✅ Successfully analyzed ${filename}: ${fileContent.content?.length || 0} chars`);
+          } else {
+            fileAnalysis.push({
+              filename: filename,
+              status: 'error',
+              error: 'Could not read file content'
+            });
+            console.log(`❌ Could not read ${filename}`);
+          }
+          
+        } catch (fileError) {
+          console.error(`❌ Error processing ${filename}:`, fileError.message);
+          fileAnalysis.push({
+            filename: filename,
+            status: 'error',
+            error: fileError.message
+          });
+        }
       }
+      
+      // Generate response based on user query and file analysis
+      const successfulFiles = fileAnalysis.filter(f => f.status === 'success');
+      
+      if (message) {
+        // User asked a specific question about the files
+        if (message.toLowerCase().includes('explain') || 
+            message.toLowerCase().includes('what is') || 
+            message.toLowerCase().includes('tell me about') ||
+            message.toLowerCase().includes('analyze')) {
+          
+          response = `📊 **Document Analysis Report**\n\n`;
+          response += `I've analyzed ${successfulFiles.length} of ${fileAnalysis.length} file(s).\n\n`;
+          
+          successfulFiles.forEach((file, index) => {
+            response += `---\n`;
+            response += `**${index + 1}. ${file.filename}**\n`;
+            response += `• Type: ${file.type.toUpperCase()} file\n`;
+            response += `• Size: ${file.formattedSize}\n`;
+            
+            if (file.statistics) {
+              if (file.statistics.lines) response += `• Lines: ${file.statistics.lines}\n`;
+              if (file.statistics.words) response += `• Words: ${file.statistics.words}\n`;
+              if (file.statistics.sheets) response += `• Sheets: ${file.statistics.sheets}\n`;
+              if (file.statistics.pages) response += `• Pages: ${file.statistics.pages}\n`;
+            }
+            
+            response += `\n**Analysis:**\n${file.analysis?.summary || 'No analysis available'}\n\n`;
+            
+            if (file.analysis?.preview) {
+              response += `**Content Preview:**\n${file.analysis.preview}\n\n`;
+            }
+          });
+          
+          if (fileAnalysis.some(f => f.status === 'error')) {
+            response += `\n**⚠️ Some files could not be processed:**\n`;
+            fileAnalysis.filter(f => f.status === 'error').forEach(f => {
+              response += `• ${f.filename}: ${f.error}\n`;
+            });
+          }
+          
+        } else if (message.toLowerCase().includes('extract') || 
+                  message.toLowerCase().includes('data') || 
+                  message.toLowerCase().includes('information')) {
+          
+          response = `🔍 **Extracted Information**\n\n`;
+          response += `From ${successfulFiles.length} file(s):\n\n`;
+          
+          successfulFiles.forEach((file, index) => {
+            response += `${index + 1}. **${file.filename}**\n`;
+            response += `   Size: ${file.formattedSize}\n`;
+            
+            if (file.analysis?.insights && file.analysis.insights.length > 0) {
+              response += `   Insights: ${file.analysis.insights.join(', ')}\n`;
+            }
+            
+            // Extract specific data if requested
+            if (message.toLowerCase().includes('email')) {
+              const emailMatches = file.content.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+              if (emailMatches) {
+                response += `   Emails: ${emailMatches.slice(0, 3).join(', ')}${emailMatches.length > 3 ? '...' : ''}\n`;
+              }
+            }
+            
+            if (message.toLowerCase().includes('date') || message.toLowerCase().includes('time')) {
+              const dateMatches = file.content.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/g);
+              if (dateMatches) {
+                response += `   Dates: ${dateMatches.slice(0, 3).join(', ')}${dateMatches.length > 3 ? '...' : ''}\n`;
+              }
+            }
+            
+            response += `\n`;
+          });
+          
+        } else if (message.toLowerCase().includes('summar') || 
+                  message.toLowerCase().includes('brief')) {
+          
+          response = `📄 **Document Summaries**\n\n`;
+          
+          successfulFiles.forEach((file, index) => {
+            response += `${index + 1}. **${file.filename}**\n`;
+            response += `   ${file.analysis?.summary?.substring(0, 200) || 'No summary available'}...\n\n`;
+          });
+          
+        } else {
+          // Generic response with file info
+          response = `📁 **Files Processed Successfully**\n\n`;
+          response += `I've analyzed ${successfulFiles.length} file(s) based on your query: "${message}"\n\n`;
+          
+          successfulFiles.forEach((file, index) => {
+            response += `${index + 1}. **${file.filename}** (${file.type}, ${file.formattedSize})\n`;
+          });
+          
+          response += `\n**You can ask me to:**\n`;
+          response += `• "Explain these documents in detail"\n`;
+          response += `• "Extract specific information from the files"\n`;
+          response += `• "Summarize the main points"\n`;
+          response += `• "Analyze the data patterns"\n`;
+        }
+        
+      } else {
+        // No specific query - show file overview
+        response = `✅ **Files Ready for Analysis**\n\n`;
+        response += `I've received ${fileAnalysis.length} file(s).\n\n`;
+        
+        fileAnalysis.forEach((file, index) => {
+          response += `${index + 1}. **${file.filename}**\n`;
+          response += `   • Status: ${file.status === 'success' ? '✅ Ready' : '❌ ' + file.error}\n`;
+          if (file.status === 'success') {
+            response += `   • Type: ${file.type}\n`;
+            response += `   • Size: ${file.formattedSize}\n`;
+          }
+          response += `\n`;
+        });
+        
+        response += `**What would you like me to do with these files?**\n`;
+        response += `Try asking:\n`;
+        response += `• "Explain what these documents are about"\n`;
+        response += `• "Analyze the content of these files"\n`;
+        response += `• "Extract key information from the documents"\n`;
+        response += `• "Summarize the main points"\n`;
+      }
+      
     } else {
-      // Regular chat/query
+      // Regular chat/query (no files)
       action = 'direct_response';
       reasoning = 'Processing user query with Agentic AI';
       confidence = 95;
@@ -511,15 +951,52 @@ app.post("/api/agentic/chat", async (req, res) => {
       const lowerMessage = message.toLowerCase();
       
       if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
-        response = `🤖 Hello! I'm your Agentic AI assistant. I can help you with data analysis, document processing, and answering questions. How can I assist you today?`;
+        response = `🤖 **Hello!** I'm your Agentic AI assistant.\n\n`;
+        response += `I can help you with:\n`;
+        response += `• **Document processing** (PDF, Word, Excel, Text)\n`;
+        response += `• **Data extraction and analysis**\n`;
+        response += `• **Content summarization**\n`;
+        response += `• **Answering questions**\n\n`;
+        response += `Upload a file or ask me anything!`;
       } else if (lowerMessage.includes('help') || lowerMessage.includes('what can you do')) {
-        response = `🤖 I'm an Agentic AI system that can:\n\n1. **Answer questions** - Ask me anything!\n2. **Process files** - Upload documents for analysis (Excel, Word, PDF, etc.)\n3. **Extract data** - Get insights from your files\n4. **Generate insights** - Provide summaries and analysis\n5. **Modify documents** - Update content based on your instructions\n\nUpload a file or ask me a question to get started!`;
+        response = `🤖 **Agentic AI Capabilities:**\n\n`;
+        response += `📁 **File Processing:**\n`;
+        response += `• Read and analyze PDF, Word, Excel, Text files\n`;
+        response += `• Extract text content and metadata\n`;
+        response += `• Analyze document structure and content\n\n`;
+        response += `🔍 **Analysis Features:**\n`;
+        response += `• Document explanation and summarization\n`;
+        response += `• Data extraction (emails, dates, names, etc.)\n`;
+        response += `• Content insights and pattern recognition\n\n`;
+        response += `📊 **Supported Formats:**\n`;
+        response += `• PDF (.pdf) - Full text extraction\n`;
+        response += `• Word (.docx) - Content reading\n`;
+        response += `• Excel (.xlsx, .xls) - Data analysis\n`;
+        response += `• Text (.txt, .csv, .json) - Direct reading\n\n`;
+        response += `**To get started:** Upload a file and ask me to explain it!`;
       } else if (lowerMessage.includes('file') || lowerMessage.includes('upload') || lowerMessage.includes('document')) {
-        response = `🤖 To process files:\n1. Click "Upload Files" button\n2. Select your documents\n3. Ask me to analyze or modify them\n\nI support:\n• **Excel** (.xlsx, .xls)\n• **Word** (.docx, .doc)\n• **PDF** (.pdf)\n• **Text** (.txt)\n• **Email** (.eml, .msg)\n• **CSV/JSON** (.csv, .json)\n\nOnce uploaded, I can analyze, extract data, or modify content.`;
-      } else if (lowerMessage.includes('agentic') || lowerMessage.includes('ai') || lowerMessage.includes('system')) {
-        response = `🤖 I'm your Agentic AI System with multi-agent capabilities:\n\n• **Document Processor** - Reads and analyzes files\n• **Data Analyzer** - Extracts insights from data\n• **Chat Assistant** - Answers questions and provides help\n\nTry uploading a file to see my processing capabilities!`;
+        response = `📁 **How to Process Files:**\n\n`;
+        response += `1. Click "Upload Files" button\n`;
+        response += `2. Select your documents (PDF, Word, Excel, Text)\n`;
+        response += `3. Ask me to analyze or explain them\n\n`;
+        response += `**Example Questions:**\n`;
+        response += `• "Explain this document"\n`;
+        response += `• "What's in this PDF file?"\n`;
+        response += `• "Extract all emails from these documents"\n`;
+        response += `• "Summarize the Excel spreadsheet"\n`;
+        response += `• "Analyze the Word document"\n\n`;
+        response += `**Try it now:** Upload a file and ask me anything about it!`;
       } else {
-        response = `🤖 I've processed your message: "${message}"\n\nAs an Agentic AI, I can help you with:\n• Data analysis and insights\n• Document processing and extraction\n• Information summarization\n• Answering complex questions\n\nFeel free to ask anything or upload files for processing!`;
+        response = `🤖 I understand you asked: "${message}"\n\n`;
+        response += `As an **Agentic AI System**, I specialize in:\n`;
+        response += `• Reading and analyzing uploaded documents\n`;
+        response += `• Extracting insights from various file formats\n`;
+        response += `• Providing detailed explanations and summaries\n\n`;
+        response += `**Try uploading a file** (PDF, Word, Excel, or Text) and asking me:\n`;
+        response += `• "Explain this document"\n`;
+        response += `• "What information is in this file?"\n`;
+        response += `• "Summarize the content"\n`;
+        response += `• "Extract key data points"\n`;
       }
     }
     
@@ -530,19 +1007,18 @@ app.post("/api/agentic/chat", async (req, res) => {
       response: response,
       data: {
         action: action,
-        file_path: hasFiles ? Object.values(file_paths)[0] : null,
         file_count: hasFiles ? fileList.length : 0,
+        file_names: hasFiles ? fileList : null,
+        files_processed: hasFiles ? fileAnalysis.filter(f => f.status === 'success').length : 0,
         confidence: confidence,
         reasoning: reasoning,
-        needs_followup: hasFiles,
-        instructions: hasFiles ? "Awaiting specific file processing instructions" : "Ready for next question",
+        needs_followup: hasFiles && (!message || message.toLowerCase().includes('upload')),
         timestamp: new Date().toISOString()
       },
-      file_outputs: hasFiles ? [] : null,
       conversation_log: [
         {
           role: 'user',
-          content: message || `Process ${fileList.join(', ')}`,
+          content: message || `Upload ${fileList.join(', ')}`,
           timestamp: new Date().toISOString()
         },
         {
@@ -554,13 +1030,22 @@ app.post("/api/agentic/chat", async (req, res) => {
       ]
     };
     
+    console.log('📤 Sending response:', { 
+      success: result.success,
+      responseLength: response.length,
+      fileCount: result.data.file_count,
+      filesProcessed: result.data.files_processed
+    });
+    
     res.json(result);
   } catch (error) {
-    console.error('Chat error:', error);
+    console.error('❌ Chat error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({ 
       success: false,
       message: "Error processing request",
-      error: error.message 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -573,6 +1058,11 @@ app.get("/api/agentic/test", (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   
+  // Test file processing capabilities
+  const testFilesDir = 'uploads/';
+  const hasUploadsDir = fsSync.existsSync(testFilesDir);
+  const testFiles = hasUploadsDir ? fsSync.readdirSync(testFilesDir).slice(0, 5) : [];
+  
   res.json({
     success: true,
     message: "✅ Agentic AI test endpoint working!",
@@ -580,7 +1070,10 @@ app.get("/api/agentic/test", (req, res) => {
     endpoints_tested: true,
     file_upload_ready: true,
     chat_processing_ready: true,
+    file_processing_ready: true,
     test_query: "Try: POST /api/agentic/chat with {message: 'Hello Agentic AI'}",
+    upload_dir_status: hasUploadsDir ? `Exists (${testFiles.length} files)` : 'Not found',
+    sample_files: testFiles,
     note: "For file upload, use the frontend interface or POST /api/agentic/upload"
   });
 });
@@ -596,6 +1089,11 @@ app.get("/", (req, res) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   
+  // Check uploads directory
+  const uploadsDir = 'uploads/';
+  const uploadsDirExists = fsSync.existsSync(uploadsDir);
+  const uploadFileCount = uploadsDirExists ? fsSync.readdirSync(uploadsDir).length : 0;
+  
   res.json({
     success: true,
     message: "🚀 Agentic System API is running successfully!",
@@ -608,6 +1106,12 @@ app.get("/", (req, res) => {
       timestamp: new Date().toISOString()
     },
     database: dbConnection ? "Connected ✅" : "Disconnected ❌",
+    file_processing: {
+      status: "Ready ✅",
+      uploads_directory: uploadsDirExists ? `Exists (${uploadFileCount} files)` : "Not found ❌",
+      supported_formats: ["PDF", "Word (.docx)", "Excel (.xlsx, .xls)", "Text (.txt, .csv, .json)", "HTML"],
+      max_file_size: "10MB"
+    },
     cors: {
       enabled: true,
       allowed_origins: [
@@ -637,7 +1141,7 @@ app.get("/", (req, res) => {
       agentic_ai: {
         status: "GET /api/agentic/status",
         upload: "POST /api/agentic/upload",
-        chat: "POST /api/agentic/chat",
+        chat: "POST /api/agentic/chat (REAL file processing)",
         root: "GET /api/agentic",
         test: "GET /api/agentic/test"
       },
@@ -674,6 +1178,11 @@ app.get("/api/health", async (req, res) => {
     const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 5000}`;
     const origin = req.headers.origin;
     
+    // Check uploads directory
+    const uploadsDir = 'uploads/';
+    const uploadsDirExists = fsSync.existsSync(uploadsDir);
+    const uploadFileCount = uploadsDirExists ? fsSync.readdirSync(uploadsDir).length : 0;
+    
     // Set CORS headers explicitly
     if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -697,10 +1206,21 @@ app.get("/api/health", async (req, res) => {
         name: mongoose.connection.name || "Unknown",
         ready_state: mongoose.connection.readyState
       },
+      file_processing: {
+        status: "Ready ✅",
+        uploads_directory: uploadsDirExists ? `Exists (${uploadFileCount} files)` : "Not found ❌",
+        libraries: {
+          pdf_parse: "Installed ✅",
+          mammoth: "Installed ✅",
+          xlsx: "Installed ✅",
+          emailjs: "Installed ✅"
+        }
+      },
       services: {
         auth_api: "operational ✅",
         agentic_ai: "operational ✅",
         file_upload: "operational ✅",
+        file_processing: "operational ✅",
         database: dbStatus
       },
       cors: {
@@ -722,7 +1242,7 @@ app.get("/api/health", async (req, res) => {
         heap_total: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)} MB`,
         heap_used: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`
       },
-      note: "Agentic AI System fully integrated and operational"
+      note: "Agentic AI System with REAL file processing fully operational"
     });
   } catch (error) {
     res.status(500).json({
@@ -771,8 +1291,9 @@ app.get("/api/test", (req, res) => {
     },
     services: {
       authentication: "operational",
-      agentic_ai: "integrated",
+      agentic_ai: "integrated with REAL file processing",
       file_upload: "ready",
+      file_processing: "ready",
       database: "connected"
     },
     cors_configuration: {
@@ -787,7 +1308,8 @@ app.get("/api/test", (req, res) => {
       "Test registration: POST /api/auth/register",
       "Test login: POST /api/auth/login",
       "Test Agentic AI: GET /api/agentic/status",
-      "Test chat: POST /api/agentic/chat"
+      "Test file upload: POST /api/agentic/upload",
+      "Test file processing: POST /api/agentic/chat with file_paths"
     ]
   });
 });
@@ -846,7 +1368,7 @@ app.use("*", (req, res) => {
       "GET  /api/agentic/status - Agentic AI status",
       "GET  /api/agentic/test - Agentic AI test",
       "POST /api/agentic/upload - File upload",
-      "POST /api/agentic/chat - Agentic AI chat",
+      "POST /api/agentic/chat - Agentic AI chat (with REAL file processing)",
       "POST /api/auth/register - User registration",
       "POST /api/auth/login   - User login",
       "GET  /api/auth/me      - Get current user",
@@ -898,7 +1420,7 @@ app.use((err, req, res, next) => {
       success: false,
       message: "📁 File Upload Error",
       error: err.message,
-      allowed_types: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv", ".eml", ".msg"],
+      allowed_types: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv", ".eml", ".msg", ".html", ".htm"],
       max_size: "10MB"
     });
   }
@@ -911,6 +1433,17 @@ app.use((err, req, res, next) => {
       error: err.message,
       fields: Object.keys(err.errors || {}),
       details: err.errors
+    });
+  }
+
+  // Handle file processing errors
+  if (err.message.includes("ENOENT") || err.message.includes("file not found")) {
+    return res.status(404).json({
+      success: false,
+      message: "📄 File Not Found",
+      error: "The requested file could not be found on the server",
+      details: err.message,
+      troubleshooting: "Try re-uploading the file or check the file path"
     });
   }
 
@@ -957,10 +1490,18 @@ const server = app.listen(PORT, () => {
       2. ${RENDER_URL}/api/auth/chats (GET) - Get user's chatHistory
       3. ${RENDER_URL}/api/auth/chats/:chatId (DELETE) - Delete chat
       
-  📍 AGENTIC AI ENDPOINTS:
+  📍 AGENTIC AI ENDPOINTS (WITH REAL FILE PROCESSING):
       1. ${RENDER_URL}/api/agentic/status
-      2. ${RENDER_URL}/api/agentic/upload (POST)
-      3. ${RENDER_URL}/api/agentic/chat (POST)
+      2. ${RENDER_URL}/api/agentic/upload (POST) - Upload files
+      3. ${RENDER_URL}/api/agentic/chat (POST) - REAL file analysis
+      4. ${RENDER_URL}/api/agentic/test - Test endpoint
+      
+  📍 FILE PROCESSING CAPABILITIES:
+      • PDF files: Full text extraction
+      • Word documents: Content reading
+      • Excel files: Data analysis
+      • Text files: Direct reading
+      • HTML files: Content extraction
       
   📍 TEST ENDPOINTS:
       1. ${RENDER_URL}/api/health
@@ -972,13 +1513,13 @@ const server = app.listen(PORT, () => {
       
   🤖 AGENTIC AI STATUS:
       Systems: 3 agents (document_processor, data_analyzer, chat_assistant)
-      File Support: Excel, Word, PDF, Text, Email, CSV, JSON
+      File Support: PDF, Word, Excel, Text, Email, CSV, JSON, HTML
       Max File Size: 10MB
       
   ⚡ QUICK START:
       1. Test API: curl ${RENDER_URL}/api/health
-      2. Test Agentic AI: curl ${RENDER_URL}/api/agentic/status
-      3. Test Chat: curl -X POST ${RENDER_URL}/api/agentic/chat -H "Content-Type: application/json" -d '{"message":"Hello AI"}'
+      2. Test file upload: curl -X POST ${RENDER_URL}/api/agentic/upload -F "file=@test.txt"
+      3. Test file processing: curl -X POST ${RENDER_URL}/api/agentic/chat -H "Content-Type: application/json" -d '{"message":"Explain this document","file_paths":{"test.txt":"C:/uploads/test.txt"}}'
       4. Register: curl -X POST ${RENDER_URL}/api/auth/register -H "Content-Type: application/json" -d '{"name":"Test","email":"test@test.com","password":"Test@123"}'
       
   ================================================
