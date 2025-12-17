@@ -1,9 +1,20 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
+// NEW: Create a FileSchema to store file objects
+const FileSchema = new mongoose.Schema({
+  name: String,           // Original filename
+  filename: String,       // Server saved filename
+  serverPath: String,     // Server path
+  type: String,           // MIME type
+  size: Number,           // File size in bytes
+  uploadedAt: Date        // When it was uploaded
+});
+
 const ChatMessageSchema = new mongoose.Schema({
   text: String,
-  files: [String],
+  // UPDATE: Change from [String] to [FileSchema]
+  files: [FileSchema],    // Array of file objects
   isUser: Boolean,
   timestamp: {
     type: Date,
@@ -23,7 +34,8 @@ const ChatHistorySchema = new mongoose.Schema({
   date: String,
   time: String,
   messages: [ChatMessageSchema],
-  files: [String],
+  // UPDATE: Change from [String] to [FileSchema]
+  files: [FileSchema],    // Array of file objects
   lastUpdated: {
     type: Date,
     default: Date.now
@@ -65,7 +77,9 @@ const UserSchema = new mongoose.Schema({
     default: Date.now
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  // ADD: This allows the schema to accept extra fields without validation errors
+  strict: false
 });
 
 // Encrypt password before saving
