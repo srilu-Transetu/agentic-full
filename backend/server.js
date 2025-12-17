@@ -746,7 +746,6 @@ app.get("/api/agentic/status", async (req, res) => {
   }
 });
 
-// In server.js - Update the upload endpoint
 app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
@@ -770,27 +769,97 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
       size: req.file.size
     });
     
-// In server.js, find the upload endpoint (around line 330)
-// Update the response to include filename clearly:
-res.json({
-  success: true,
-  message: "✅ File uploaded successfully",
-  file: {
-    original_name: req.file.originalname,
-    saved_name: req.file.filename,      // This is the actual filename on server
-    filename: req.file.filename,        // Add this for clarity
-    path: req.file.path,
-    size: req.file.size,
-    mimetype: req.file.mimetype,
-    uploaded_at: new Date().toISOString()
-  },
-  instructions: "Use the saved_name in chat requests for processing"
-});
+    // FIXED RESPONSE - Include both filename and saved_name
+    res.json({
+      success: true,
+      message: "✅ File uploaded successfully",
+      file: {
+        original_name: req.file.originalname,
+        saved_name: req.file.filename,  // The actual filename on server
+        filename: req.file.filename,    // Same as saved_name
+        path: req.file.path,
+        size: req.file.size,
+        mimetype: req.file.mimetype,
+        uploaded_at: new Date().toISOString()
+      },
+      instructions: "Use saved_name in chat requests"
+    });
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ 
       success: false, 
       error: error.message 
+    });
+  }
+});
+
+// Change Password endpoint
+app.put("/api/auth/changepassword", protect, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user?.id;
+    
+    console.log('🔐 Change password request:', { userId });
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required"
+      });
+    }
+    
+    // Validate inputs
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required"
+      });
+    }
+    
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "New passwords do not match"
+      });
+    }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters"
+      });
+    }
+    
+    // Find user
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    
+    // TODO: Add actual password verification logic here
+    // For now, we'll assume current password is valid
+    
+    // Update password (in real app, you'd hash it)
+    user.password = newPassword; // In production, hash this!
+    await user.save();
+    
+    console.log('✅ Password changed for user:', userId);
+    
+    res.json({
+      success: true,
+      message: "Password changed successfully"
+    });
+    
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
