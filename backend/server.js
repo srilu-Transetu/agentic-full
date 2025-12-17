@@ -144,8 +144,6 @@ app.use((req, res, next) => {
 app.use("/api/auth", authRoutes);
 
 // ==================== CHAT ENDPOINTS ====================
-
-// Save or update a chat IN USER'S chatHistory - FIXED VERSION
 app.post("/api/auth/chats", protect, async (req, res) => {
   try {
     const { chatId, title, messages = [], files = [], date, time } = req.body;
@@ -160,7 +158,6 @@ app.post("/api/auth/chats", protect, async (req, res) => {
       });
     }
 
-    // Check if chatId is provided
     if (!chatId) {
       return res.status(400).json({
         success: false,
@@ -168,7 +165,29 @@ app.post("/api/auth/chats", protect, async (req, res) => {
       });
     }
 
-    // Prepare chat data - FIXED STRUCTURE
+    // FIX: Clean the files data before saving
+    const cleanFiles = files.map(file => {
+      if (typeof file === 'string') return file;
+      if (file && typeof file === 'object') {
+        // Store just the filename as string
+        return file.name || file.filename || JSON.stringify(file);
+      }
+      return '';
+    }).filter(f => f);
+
+    // FIX: Clean messages files too
+    const cleanMessages = messages.map(msg => ({
+      ...msg,
+      files: (msg.files || []).map(file => {
+        if (typeof file === 'string') return file;
+        if (file && typeof file === 'object') {
+          return file.name || file.filename || JSON.stringify(file);
+        }
+        return '';
+      }).filter(f => f)
+    }));
+
+    // Prepare chat data - with cleaned files
     const chatData = {
       chatId: chatId,
       title: title || 'New Chat',
@@ -180,15 +199,16 @@ app.post("/api/auth/chats", protect, async (req, res) => {
         hour: '2-digit', 
         minute: '2-digit' 
       }),
-      messages: Array.isArray(messages) ? messages : [],
-      files: Array.isArray(files) ? files : [],
+      messages: cleanMessages,
+      files: cleanFiles,
       lastUpdated: new Date()
     };
 
-    console.log('💾 Chat data prepared:', { 
+    console.log('💾 Chat data prepared (cleaned):', { 
       chatId: chatData.chatId, 
       title: chatData.title,
-      messagesCount: chatData.messages.length 
+      messagesCount: chatData.messages.length,
+      filesCount: chatData.files.length
     });
 
     // Update user's chatHistory
@@ -235,7 +255,15 @@ app.post("/api/auth/chats", protect, async (req, res) => {
   } catch (error) {
     console.error('🔥 Save chat error:', error);
     console.error('🔥 Error stack:', error.stack);
-    console.error('🔥 Request body:', req.body);
+    
+    // Try to clean the database
+    if (error.message.includes('Cast to [string] failed')) {
+      return res.status(400).json({
+        success: false,
+        message: "Data format error. Please use the /api/auth/clean-chat-data endpoint first.",
+        error: "Invalid files format"
+      });
+    }
     
     res.status(500).json({
       success: false,
@@ -1588,4 +1616,64 @@ process.on("uncaughtException", (err) => {
   console.error("💥 Uncaught Exception:", err.message);
   console.error("💥 Stack:", err.stack);
   process.exit(1);
+});
+// Add this cleanup endpoint
+app.post("/api/admin/cleanup-files", async (req, res) => {
+  try {
+    const users = await User.find({});
+    let fixedUsers = 0;
+    
+    for (const user of users) {
+      let needsFix = false;
+      
+      if (user.chatHistory && Array.isArray(user.chatHistory)) {
+        for (const chat of user.chatHistory) {
+          // Fix chat-level files
+          if (chat.files && Array.isArray(chat.files)) {
+            chat.files = chat.files.map(file => {
+              if (typeof file === 'string') return file;
+              if (file && typeof file === 'object') {
+                return file.name || file.filename || String(file);
+              }
+              return '';
+            }).filter(f => f && f.trim() !== '');
+            needsFix = true;
+          }
+          
+          // Fix message-level files
+          if (chat.messages && Array.isArray(chat.messages)) {
+            for (const msg of chat.messages) {
+              if (msg.files && Array.isArray(msg.files)) {
+                msg.files = msg.files.map(file => {
+                  if (typeof file === 'string') return file;
+                  if (file && typeof file === 'object') {
+                    return file.name || file.filename || String(file);
+                  }
+                  return '';
+                }).filter(f => f && f.trim() !== '');
+                needsFix = true;
+              }
+            }
+          }
+        }
+        
+        if (needsFix) {
+          await user.save();
+          fixedUsers++;
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Fixed ${fixedUsers} users`,
+      totalUsers: users.length
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
