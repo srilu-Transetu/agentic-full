@@ -338,23 +338,61 @@ app.delete("/api/auth/chats/:chatId", protect, async (req, res) => {
 
 // ==================== FILE PROCESSING FUNCTIONS ====================
 
+// ==================== FILE PROCESSING FUNCTIONS ====================
+
 // Helper function to read file content based on type
 async function readFileContent(filePath, filename) {
   try {
-    const ext = path.extname(filename).toLowerCase();
-    console.log(`📖 Reading file: ${filename} (${ext}) from ${filePath}`);
+    console.log(`📖 Attempting to read: ${filename} (provided path: ${filePath})`);
+    
+    // Handle different path formats from frontend
+    let actualPath;
+    
+    if (filePath.includes('C:/')) {
+      // Frontend sent Windows path - extract just the filename
+      const justFilename = path.basename(filePath);
+      actualPath = path.join('uploads', justFilename);
+    } else if (filePath.includes('uploads/')) {
+      // Already has uploads/ prefix
+      actualPath = filePath;
+    } else {
+      // Just filename, prepend uploads/
+      actualPath = path.join('uploads', filePath);
+    }
+    
+    console.log(`🔍 Looking for file at: ${actualPath}`);
+    console.log(`🔍 Full path: ${path.resolve(actualPath)}`);
     
     // Check if file exists
     try {
-      await fs.access(filePath);
+      await fs.access(actualPath);
+      console.log(`✅ File exists at: ${actualPath}`);
     } catch (err) {
-      console.log(`❌ File not found: ${filePath}`);
+      console.log(`❌ File not found at: ${actualPath}`);
+      
+      // List files in uploads directory for debugging
+      const uploadsDir = 'uploads/';
+      if (fsSync.existsSync(uploadsDir)) {
+        const files = fsSync.readdirSync(uploadsDir);
+        console.log(`📁 Available files in uploads/: ${files.length} files`);
+        files.forEach((f, i) => {
+          if (i < 10) console.log(`  ${i+1}. ${f}`);
+          if (i === 10) console.log(`  ... and ${files.length - 10} more`);
+        });
+      } else {
+        console.log('❌ Uploads directory does not exist!');
+      }
+      
       return null;
     }
     
-    const stats = await fs.stat(filePath);
+    const stats = await fs.stat(actualPath);
     console.log(`✅ File stats: ${stats.size} bytes, modified: ${stats.mtime}`);
     
+    // Get file extension
+    const ext = path.extname(filename).toLowerCase();
+    
+    // Now continue with your original file reading logic
     switch (ext) {
       case '.txt':
       case '.csv':
@@ -362,7 +400,7 @@ async function readFileContent(filePath, filename) {
       case '.html':
       case '.htm':
         // Text files
-        const content = await fs.readFile(filePath, 'utf8');
+        const content = await fs.readFile(actualPath, 'utf8');
         return {
           type: 'text',
           content: content,
@@ -374,7 +412,7 @@ async function readFileContent(filePath, filename) {
       case '.pdf':
         try {
           // PDF files
-          const dataBuffer = await fs.readFile(filePath);
+          const dataBuffer = await fs.readFile(actualPath);
           const pdfData = await pdf(dataBuffer);
           return {
             type: 'pdf',
@@ -396,7 +434,7 @@ async function readFileContent(filePath, filename) {
       case '.docx':
         try {
           // Word documents
-          const docBuffer = await fs.readFile(filePath);
+          const docBuffer = await fs.readFile(actualPath);
           const result = await mammoth.extractRawText({ buffer: docBuffer });
           return {
             type: 'word',
@@ -418,7 +456,7 @@ async function readFileContent(filePath, filename) {
       case '.xls':
         try {
           // Excel files
-          const workbook = xlsx.readFile(filePath);
+          const workbook = xlsx.readFile(actualPath);
           let excelContent = '';
           let totalRows = 0;
           let totalColumns = 0;
@@ -680,7 +718,7 @@ app.get("/api/agentic/status", async (req, res) => {
   }
 });
 
-// 3. File Upload for Agentic AI
+// In server.js - Update the upload endpoint
 app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
@@ -690,7 +728,7 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
       });
     }
     
-    // Set CORS headers explicitly
+    // Set CORS headers
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -699,24 +737,27 @@ app.post("/api/agentic/upload", upload.single('file'), (req, res) => {
     
     console.log('✅ File uploaded:', {
       name: req.file.originalname,
-      size: req.file.size,
-      path: req.file.path
+      savedName: req.file.filename,
+      path: req.file.path,
+      size: req.file.size
     });
     
-    res.json({
-      success: true,
-      message: "✅ File uploaded successfully",
-      file: {
-        original_name: req.file.originalname,
-        saved_name: req.file.filename,
-        path: req.file.path,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-        uploaded_at: new Date().toISOString()
-      },
-      instructions: "Use the file path in chat requests for processing",
-      next_step: "Use POST /api/agentic/chat with file_paths parameter"
-    });
+// In server.js, find the upload endpoint (around line 330)
+// Update the response to include filename clearly:
+res.json({
+  success: true,
+  message: "✅ File uploaded successfully",
+  file: {
+    original_name: req.file.originalname,
+    saved_name: req.file.filename,      // This is the actual filename on server
+    filename: req.file.filename,        // Add this for clarity
+    path: req.file.path,
+    size: req.file.size,
+    mimetype: req.file.mimetype,
+    uploaded_at: new Date().toISOString()
+  },
+  instructions: "Use the saved_name in chat requests for processing"
+});
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ 
