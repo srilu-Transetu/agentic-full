@@ -176,6 +176,7 @@ body {
   scrollbar-width: none;  /* Firefox */
 }
 
+/* Add these to your existing globals.css */
 @keyframes spin-slow {
   from {
     transform: rotate(0deg);
@@ -187,7 +188,7 @@ body {
 
 @keyframes float {
   0%, 100% {
-    transform: translateY(0);
+    transform: translateY(0px);
   }
   50% {
     transform: translateY(-10px);
@@ -200,4 +201,9 @@ body {
 
 .animate-float {
   animation: float 3s ease-in-out infinite;
+}
+
+/* Smooth transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }

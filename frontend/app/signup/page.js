@@ -23,8 +23,8 @@ export default function SignupPage() {
   const [showPrivacyModal, setShowPrivacyModal] = useState(false)
   const router = useRouter()
 
-  // Get backend URL from environment or use Render URL
-  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'https://agentic-system-1.onrender.com/api'
+  // Get backend URL from environment
+  const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'https://agentic-system-1.onrender.com'
 
   // Password validation
   const validatePassword = (password) => {
@@ -84,13 +84,15 @@ export default function SignupPage() {
         // Check if token and user data are saved
         if (typeof window !== 'undefined') {
           const token = localStorage.getItem('token')
-          const user = localStorage.getItem('user')
+          const user = localStorage.getItem('agentic_ai_user')
           console.log('✅ Local storage check - Token:', token ? 'Saved' : 'Not saved')
           console.log('✅ Local storage check - User:', user ? 'Saved' : 'Not saved')
         }
         
-        // Redirect immediately to dashboard
-        router.push('/dashboard')
+        // Redirect to dashboard after successful signup
+        setTimeout(() => {
+          router.push('/dashboard')
+        }, 1000)
         
       } else {
         // Show detailed error if available
@@ -115,6 +117,8 @@ export default function SignupPage() {
         errorMessage = err.data.errors.map(err => `${err.field}: ${err.message}`).join(', ')
       } else if (err.data?.message) {
         errorMessage = err.data.message
+      } else if (err.status === 404) {
+        errorMessage = 'API endpoint not found. Please check backend routes.'
       }
       
       setError(errorMessage)
