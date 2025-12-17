@@ -129,11 +129,13 @@ app.use("/api/auth", authRoutes);
 
 // ==================== CHAT ENDPOINTS ====================
 
-// Save or update a chat IN USER'S chatHistory
+// Save or update a chat IN USER'S chatHistory - FIXED VERSION
 app.post("/api/auth/chats", protect, async (req, res) => {
   try {
-    const { chatId, title, messages, files, date, time } = req.body;
+    const { chatId, title, messages = [], files = [], date, time } = req.body;
     const userId = req.user?.id;
+    
+    console.log('📝 Save chat request:', { chatId, userId, title, messagesCount: messages?.length || 0 });
     
     if (!userId) {
       return res.status(401).json({
@@ -150,9 +152,9 @@ app.post("/api/auth/chats", protect, async (req, res) => {
       });
     }
 
-    // Prepare chat data
+    // Prepare chat data - FIXED STRUCTURE
     const chatData = {
-      chatId: chatId, // REQUIRED field
+      chatId: chatId,
       title: title || 'New Chat',
       date: date || new Date().toLocaleDateString('en-US', { 
         month: 'short', 
@@ -162,19 +164,31 @@ app.post("/api/auth/chats", protect, async (req, res) => {
         hour: '2-digit', 
         minute: '2-digit' 
       }),
-      messages: messages || [],
-      files: files || [],
+      messages: Array.isArray(messages) ? messages : [],
+      files: Array.isArray(files) ? files : [],
       lastUpdated: new Date()
     };
+
+    console.log('💾 Chat data prepared:', { 
+      chatId: chatData.chatId, 
+      title: chatData.title,
+      messagesCount: chatData.messages.length 
+    });
 
     // Update user's chatHistory
     const user = await User.findById(userId);
     
     if (!user) {
+      console.log('❌ User not found:', userId);
       return res.status(404).json({
         success: false,
         message: "User not found"
       });
+    }
+
+    // Initialize chatHistory if it doesn't exist
+    if (!user.chatHistory) {
+      user.chatHistory = [];
     }
 
     // Check if chat already exists
@@ -182,17 +196,20 @@ app.post("/api/auth/chats", protect, async (req, res) => {
     
     if (existingChatIndex > -1) {
       // Update existing chat
+      console.log('📝 Updating existing chat at index:', existingChatIndex);
       user.chatHistory[existingChatIndex] = {
-        ...user.chatHistory[existingChatIndex].toObject(),
+        ...user.chatHistory[existingChatIndex]._doc || user.chatHistory[existingChatIndex],
         ...chatData
       };
     } else {
       // Add new chat
+      console.log('➕ Adding new chat to chatHistory');
       user.chatHistory.push(chatData);
     }
 
     // Save user
     await user.save();
+    console.log('✅ Chat saved successfully for user:', userId);
 
     res.json({
       success: true,
@@ -200,7 +217,10 @@ app.post("/api/auth/chats", protect, async (req, res) => {
       chat: chatData
     });
   } catch (error) {
-    console.error('Save chat error:', error);
+    console.error('🔥 Save chat error:', error);
+    console.error('🔥 Error stack:', error.stack);
+    console.error('🔥 Request body:', req.body);
+    
     res.status(500).json({
       success: false,
       message: "Failed to save chat",
