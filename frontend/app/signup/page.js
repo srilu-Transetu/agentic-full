@@ -1,10 +1,10 @@
 'use client'
-
+import axios from 'axios';
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { User, Mail, Lock, Eye, EyeOff, CheckCircle, XCircle, FileText, Shield, X, Bot, Sparkles } from 'lucide-react'
-import { authAPI } from '@/services/api'
+import { authAPI } from '@/services/api';
 import toast from 'react-hot-toast'
 
 export default function SignupPage() {
@@ -39,94 +39,111 @@ export default function SignupPage() {
 
   const passwordRequirements = validatePassword(formData.password)
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError('')
-    setSuccess('')
+const handleSubmit = async (e) => {
+  e.preventDefault()
+  setError('')
+  setSuccess('')
 
-    // Validation
-    if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match')
-      toast.error('❌ Passwords do not match')
-      return
-    }
+  // Validation
+  if (formData.password !== formData.confirmPassword) {
+    setError('Passwords do not match')
+    toast.error('❌ Passwords do not match')
+    return
+  }
 
-    // Check all password requirements
-    const requirements = validatePassword(formData.password)
-    const allValid = Object.values(requirements).every(req => req)
-    if (!allValid) {
-      setError('Please meet all password requirements')
-      toast.error('⚠️ Please meet all password requirements')
-      return
-    }
+  // Check all password requirements
+  const requirements = validatePassword(formData.password)
+  const allValid = Object.values(requirements).every(req => req)
+  if (!allValid) {
+    setError('Please meet all password requirements')
+    toast.error('⚠️ Please meet all password requirements')
+    return
+  }
 
-    setLoading(true)
+  setLoading(true)
 
-    try {
-      console.log('📝 Signup attempt for:', formData.email)
-      console.log('📡 Backend URL:', BACKEND_URL)
+  try {
+    console.log('📝 Signup attempt for:', formData.email)
+    console.log('📡 Backend URL:', BACKEND_URL)
+    
+    // FIXED: Use the correct response structure
+    const response = await axios.post(`${BACKEND_URL}/api/auth/register`, {
+      name: formData.name,
+      email: formData.email,
+      password: formData.password
+    });
+
+    const data = response.data; // Get the data from response
+    console.log('✅ Signup API response:', data)
+    
+    // FIXED: Check data.success instead of response.success
+    if (data.success) {
+      setSuccess(data.message || 'Account created successfully! Welcome to Agentic System.')
       
-      // Use the imported authAPI from services
-      const response = await authAPI.register({
-        name: formData.name,
-        email: formData.email,
-        password: formData.password,
-        confirmPassword: formData.confirmPassword
-      })
-
-      console.log('✅ Signup API response:', response)
+      toast.success('🎉 Account created successfully!')
       
-      if (response.success) {
-        setSuccess(response.message || 'Account created successfully! Welcome to Agentic System.')
-        
-        toast.success('🎉 Account created successfully!')
-        
-        // Check if token and user data are saved
-        if (typeof window !== 'undefined') {
-          const token = localStorage.getItem('token')
-          const user = localStorage.getItem('agentic_ai_user')
-          console.log('✅ Local storage check - Token:', token ? 'Saved' : 'Not saved')
-          console.log('✅ Local storage check - User:', user ? 'Saved' : 'Not saved')
+      // Check if token and user data are saved
+      if (typeof window !== 'undefined') {
+        // FIXED: Save token and user from data, not response
+        if (data.token) {
+          localStorage.setItem('token', data.token);
+        }
+        if (data.user) {
+          localStorage.setItem('agentic_ai_user', JSON.stringify(data.user));
         }
         
-        // Redirect to dashboard after successful signup
-        setTimeout(() => {
-          router.push('/dashboard')
-        }, 1000)
-        
-      } else {
-        // Show detailed error if available
-        let errorMessage = response.message || 'Signup failed. Please try again.'
-        
-        // Check if there are validation errors
-        if (response.errors && Array.isArray(response.errors)) {
-          errorMessage = response.errors.map(err => `${err.field}: ${err.message}`).join(', ')
-        }
-        
-        setError(errorMessage)
-        toast.error('❌ ' + errorMessage)
+        const token = localStorage.getItem('token')
+        const user = localStorage.getItem('agentic_ai_user')
+        console.log('✅ Local storage check - Token:', token ? 'Saved' : 'Not saved')
+        console.log('✅ Local storage check - User:', user ? 'Saved' : 'Not saved')
       }
-
-    } catch (err) {
-      console.error('❌ Signup error:', err)
       
-      let errorMessage = err.message || err.error || 'Signup failed. Please try again.'
+      // Redirect to dashboard after successful signup
+      setTimeout(() => {
+        router.push('/dashboard')
+      }, 1000)
       
-      // Check if there are validation errors in response
-      if (err.data?.errors) {
-        errorMessage = err.data.errors.map(err => `${err.field}: ${err.message}`).join(', ')
-      } else if (err.data?.message) {
-        errorMessage = err.data.message
-      } else if (err.status === 404) {
-        errorMessage = 'API endpoint not found. Please check backend routes.'
+    } else {
+      // Show detailed error if available
+      let errorMessage = data.message || 'Signup failed. Please try again.'
+      
+      // Check if there are validation errors
+      if (data.errors && Array.isArray(data.errors)) {
+        errorMessage = data.errors.map(err => `${err.field}: ${err.message}`).join(', ')
       }
       
       setError(errorMessage)
       toast.error('❌ ' + errorMessage)
-    } finally {
-      setLoading(false)
     }
+
+  } catch (err) {
+    console.error('❌ Signup error:', err)
+    
+    // FIXED: Handle axios error structure
+    let errorMessage = 'Signup failed. Please try again.';
+    
+    if (err.response) {
+      // Server responded with error
+      const errorData = err.response.data;
+      errorMessage = errorData.message || errorData.error || 'Signup failed';
+      
+      if (errorData.errors && Array.isArray(errorData.errors)) {
+        errorMessage = errorData.errors.map(err => `${err.field}: ${err.message}`).join(', ')
+      }
+    } else if (err.request) {
+      // Request was made but no response
+      errorMessage = 'No response from server. Please check your internet connection.';
+    } else {
+      // Something else happened
+      errorMessage = err.message || 'Signup failed';
+    }
+    
+    setError(errorMessage)
+    toast.error('❌ ' + errorMessage)
+  } finally {
+    setLoading(false)
   }
+}
 
   const handleChange = (e) => {
     setFormData({
@@ -568,29 +585,30 @@ export default function SignupPage() {
             </button>
 
             {/* Demo Note */}
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-4">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-white" />
-                  </div>
-                </div>
-                <div className="ml-3">
-                  <p className="text-sm font-semibold text-blue-900 mb-1">Backend Status</p>
-                  <div className="space-y-1">
-                    <p className="text-xs text-blue-700">
-                      • Using real backend API
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      • Data will be saved to MongoDB
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      • Backend URL: {BACKEND_URL}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
+{/* Demo Note - UPDATED CODE (Replace with this) */}
+<div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-4">
+  <div className="flex items-start">
+    <div className="flex-shrink-0">
+      <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
+        <Sparkles className="w-4 h-4 text-white" />
+      </div>
+    </div>
+    <div className="ml-3">
+      <p className="text-sm font-semibold text-blue-900 mb-1">Backend Status</p>
+      <div className="space-y-1">
+        <p className="text-xs text-blue-700">
+          • Endpoint: POST {BACKEND_URL}/api/auth/register
+        </p>
+        <p className="text-xs text-blue-700">
+          • Data saved to MongoDB
+        </p>
+        <p className="text-xs text-blue-700">
+          • JWT authentication enabled
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
           </form>
 
           {/* Login Link */}

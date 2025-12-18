@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Lock, Eye, EyeOff, ShieldCheck, CheckCircle, XCircle, ArrowLeft, AlertCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { authAPI } from '@/services/api';
 
 export default function ResetPasswordPage() {
   const [formData, setFormData] = useState({
@@ -32,84 +33,117 @@ export default function ResetPasswordPage() {
 
   const passwordRequirements = validatePassword(formData.newPassword)
 
-  // Check token on component mount
-  useEffect(() => {
-    const token = searchParams.get('token')
-    const email = searchParams.get('email')
+// Check token on component mount
+useEffect(() => {
+  const token = searchParams.get('token');
+  const email = searchParams.get('email');
+  
+  console.log('🔍 Token validation:', { token, email });
+  
+  if (!token) {
+    console.log('❌ No token in URL');
+    setTokenValid(false);
+    toast.error('No reset token provided');
+    return;
+  }
+  
+  // Accept demo tokens
+  if (token.includes('demo') || token.startsWith('demo_')) {
+    console.log('✅ Demo token accepted');
+    setTokenValid(true);
+    return;
+  }
+  
+  // For real tokens, we'll accept them and let backend validate
+  if (token && token.length > 10) {
+    console.log('✅ Token appears valid - will be validated by backend');
+    setTokenValid(true);
+  } else {
+    console.log('❌ Token appears invalid');
+    setTokenValid(false);
+    toast.error('Invalid reset token');
+  }
+}, [searchParams]);
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  
+  // Check if token is valid
+  if (!tokenValid) {
+    toast.error('Invalid reset token. Please request a new reset link.');
+    return;
+  }
+  
+  // Validation
+  if (formData.newPassword !== formData.confirmPassword) {
+    toast.error('Passwords do not match');
+    return;
+  }
+
+  // Check all password requirements
+  const requirements = validatePassword(formData.newPassword);
+  const allValid = Object.values(requirements).every(req => req);
+  if (!allValid) {
+    toast.error('Please meet all password requirements');
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Get token and email from URL
+    const token = searchParams.get('token');
+    const email = searchParams.get('email');
     
-    // In demo mode, accept any token
-    if (!token || token === 'demo' || token.includes('demo')) {
-      setTokenValid(true)
-    } else {
-      // Check if token exists in localStorage (demo)
-      const storedToken = localStorage.getItem('resetToken')
-      if (storedToken && storedToken === token) {
-        setTokenValid(true)
-      } else {
-        setTokenValid(false)
-        toast.error('Invalid or expired reset token')
-      }
-    }
-  }, [searchParams])
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+    console.log('🔑 Reset token from URL:', token);
+    console.log('📧 Email from URL:', email);
+    console.log('🔐 New password:', formData.newPassword);
     
-    // Check if token is valid
-    if (!tokenValid) {
-      toast.error('Invalid reset token. Please request a new reset link.')
-      return
-    }
+    // IMPORTANT: Call the actual backend API
+    const response = await authAPI.resetPassword(token, formData.newPassword);
     
-    // Validation
-    if (formData.newPassword !== formData.confirmPassword) {
-      toast.error('Passwords do not match')
-      return
-    }
-
-    // Check all password requirements
-    const requirements = validatePassword(formData.newPassword)
-    const allValid = Object.values(requirements).every(req => req)
-    if (!allValid) {
-      toast.error('Please meet all password requirements')
-      return
-    }
-
-    // Check if new password is same as old (demo check)
-    const oldPassword = localStorage.getItem('oldPassword')
-    if (oldPassword && formData.newPassword === oldPassword) {
-      toast.error('New password must be different from your previous password')
-      return
-    }
-
-    setLoading(true)
-
-    try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1500))
+    console.log('✅ API Response:', response);
+    
+    if (response.success) {
+      setPasswordChanged(true);
+      toast.success('✅ Password reset successful!');
       
-      // Store new password in localStorage for demo
+      // Clear any demo data from localStorage
       if (typeof window !== 'undefined') {
-        localStorage.setItem('oldPassword', formData.newPassword)
-        localStorage.removeItem('resetToken')
-        localStorage.removeItem('resetEmail')
+        localStorage.removeItem('oldPassword');
+        localStorage.removeItem('resetToken');
+        localStorage.removeItem('resetEmail');
       }
-      
-      setPasswordChanged(true)
-      toast.success('✅ Password reset successful!')
       
       // Redirect to login after success
       setTimeout(() => {
-        router.push('/login?resetSuccess=true')
-      }, 2000)
-      
-    } catch (error) {
-      console.error('Reset password error:', error)
-      toast.error('Failed to reset password. Please try again.')
-    } finally {
-      setLoading(false)
+        router.push('/login?resetSuccess=true');
+      }, 2000);
+    } else {
+      toast.error(response.message || 'Failed to reset password');
     }
+    
+  } catch (error) {
+    console.error('Reset password error details:', {
+      error,
+      status: error.status,
+      code: error.code,
+      message: error.message,
+      data: error.data
+    });
+    
+    // Handle specific error cases
+    if (error.status === 400) {
+      toast.error('Invalid or expired reset token. Please request a new link.');
+    } else if (error.code === 'ERR_NETWORK') {
+      toast.error('Cannot connect to server. Please check your connection.');
+    } else {
+      toast.error(error.message || 'Failed to reset password. Please try again.');
+    }
+  } finally {
+    setLoading(false);
   }
+};
 
   const handleChange = (e) => {
     setFormData({

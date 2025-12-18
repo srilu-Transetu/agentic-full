@@ -3,18 +3,17 @@ const bcrypt = require('bcryptjs');
 
 // NEW: Create a FileSchema to store file objects
 const FileSchema = new mongoose.Schema({
-  name: String,           // Original filename
-  filename: String,       // Server saved filename
-  serverPath: String,     // Server path
-  type: String,           // MIME type
-  size: Number,           // File size in bytes
-  uploadedAt: Date        // When it was uploaded
+  name: String,
+  filename: String,
+  serverPath: String,
+  type: String,
+  size: Number,
+  uploadedAt: Date
 });
 
 const ChatMessageSchema = new mongoose.Schema({
   text: String,
-  // UPDATE: Change from [String] to [FileSchema]
-  files: [FileSchema],    // Array of file objects
+  files: [FileSchema],
   isUser: Boolean,
   timestamp: {
     type: Date,
@@ -34,8 +33,7 @@ const ChatHistorySchema = new mongoose.Schema({
   date: String,
   time: String,
   messages: [ChatMessageSchema],
-  // UPDATE: Change from [String] to [FileSchema]
-  files: [FileSchema],    // Array of file objects
+  files: [FileSchema],
   lastUpdated: {
     type: Date,
     default: Date.now
@@ -67,7 +65,7 @@ const UserSchema = new mongoose.Schema({
   },
   chatHistory: [ChatHistorySchema],
   resetPasswordToken: String,
-  resetPasswordExpire: Date,
+  resetPasswordExpire: Date, // FIXED: Changed from resetPasswordExpires to resetPasswordExpire (singular)
   createdAt: {
     type: Date,
     default: Date.now
@@ -78,7 +76,6 @@ const UserSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true,
-  // ADD: This allows the schema to accept extra fields without validation errors
   strict: false
 });
 
@@ -123,6 +120,13 @@ UserSchema.methods.getResetPasswordToken = function() {
 
   // Set expire (10 minutes)
   this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+
+  console.log('🔑 Generated reset token:', {
+    plainToken: resetToken,
+    hashedToken: this.resetPasswordToken,
+    expiresAt: new Date(this.resetPasswordExpire).toLocaleString(),
+    email: this.email
+  });
 
   return resetToken;
 };

@@ -1,9 +1,9 @@
-// frontend/services/api.js - UPDATED AND CORRECTED VERSION
+// frontend/services/api.js - AUTHENTICATION ONLY VERSION
 import axios from 'axios';
 
 // ==================== SINGLE BACKEND URL ====================
 // Using environment variable for flexibility
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://agentic-system-1.onrender.com';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
 console.log('🚀 API Base URL:', API_BASE_URL);
 
@@ -156,54 +156,17 @@ export const checkHealth = async () => {
   }
 };
 
-// ==================== CONNECTION TEST UTILITY ====================
-export const testConnection = async () => {
-  console.log('🔌 Testing connection to backend...');
-  
-  // Try multiple endpoints to see what works
-  const endpoints = [
-    '/api/health',
-    '/',
-    '/api/auth/test'
-  ];
-  
-  for (const endpoint of endpoints) {
-    try {
-      console.log(`Trying ${endpoint}...`);
-      const response = await axios.get(API_BASE_URL + endpoint, {
-        timeout: 5000
-      });
-      
-      console.log(`✅ Successfully connected to ${endpoint}`);
-      return {
-        success: true,
-        endpoint,
-        status: response.status,
-        data: response.data
-      };
-    } catch (error) {
-      console.log(`❌ Failed to connect to ${endpoint}:`, error.message);
-    }
-  }
-  
-  return {
-    success: false,
-    message: `Could not connect to any endpoint at ${API_BASE_URL}`,
-    suggestion: 'Check if the server is running and the URL is correct'
-  };
-};
-
 // ==================== UNIFIED API ====================
-export const agenticAPI = {
-  // ========== CONNECTION & HEALTH ==========
+export const authAPI = {
+  // ========== HEALTH CHECK ==========
   healthCheck: checkHealth,
-  
-  testConnection: testConnection,
 
-  // ========== AUTH ENDPOINTS ==========
+  // ========== AUTHENTICATION ENDPOINTS ==========
+  
+  // 1. Register new user
   register: async (userData) => {
     try {
-      console.log('📝 Registering:', userData.email);
+      console.log('📝 Registering user:', userData.email);
       const response = await api.post('/api/auth/register', userData);
       
       if (response.data.success && response.data.token) {
@@ -218,7 +181,6 @@ export const agenticAPI = {
     } catch (error) {
       console.error('❌ Registration error:', error.message);
       
-      // Provide better error message
       if (error.code === 'ERR_NETWORK') {
         throw {
           ...error,
@@ -230,6 +192,7 @@ export const agenticAPI = {
     }
   },
 
+  // 2. User login
   login: async (credentials) => {
     try {
       console.log('🔐 Logging in:', credentials.email);
@@ -247,7 +210,6 @@ export const agenticAPI = {
     } catch (error) {
       console.error('❌ Login error:', error);
       
-      // Enhanced error handling for login
       let userMessage = 'Login failed';
       
       if (error.code === 'ERR_NETWORK') {
@@ -265,16 +227,112 @@ export const agenticAPI = {
     }
   },
 
-  getCurrentUser: async () => {
+  // 3. Password reset request
+  forgotPassword: async (email) => {
     try {
-      console.log('👤 Getting current user');
-      const response = await api.get('/api/auth/me');
+      console.log('🔑 Forgot password request:', email);
+      const response = await api.post('/api/auth/forgot-password', { email });
+      console.log('✅ Forgot password request sent');
       return response.data;
     } catch (error) {
-      console.error('❌ Get current user error:', error.message);
+      console.error('❌ Forgot password error:', error.message);
       
-      // If 401, clear storage
+      let userMessage = 'Failed to process password reset request';
+      if (error.code === 'ERR_NETWORK') {
+        userMessage = 'Cannot connect to server. Please check your internet connection.';
+      }
+      
+      throw {
+        ...error,
+        userMessage
+      };
+    }
+  },
+
+  // 4. Reset password with token
+resetPassword: async (token, newPassword) => {
+  try {
+    console.log('🔄 Resetting password with token');
+    const response = await api.put(`/api/auth/resetpassword/${token}`, {
+      password: newPassword
+    });
+    return response.data;
+  } catch (error) {
+      console.error('❌ Reset password error:', error.message);
+      
+      let userMessage = 'Failed to reset password';
+      if (error.status === 400) {
+        userMessage = 'Invalid or expired reset token';
+      }
+      
+      throw {
+        ...error,
+        userMessage
+      };
+    }
+  },
+
+// Change this in your frontend/services/api.js
+// Update ONLY the changePassword function:
+
+// 5. Change password (authenticated)
+changePassword: async (passwordData) => {
+  try {
+    console.log('🔐 Changing password...', {
+      hasCurrentPassword: !!passwordData.currentPassword,
+      hasNewPassword: !!passwordData.newPassword,
+      hasConfirmPassword: !!passwordData.confirmNewPassword
+    });
+    
+    const response = await api.put('/api/auth/changepassword', {
+      currentPassword: passwordData.currentPassword,
+      newPassword: passwordData.newPassword,
+      confirmNewPassword: passwordData.confirmNewPassword
+    });
+    
+    console.log('✅ Password changed successfully:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('❌ Change password error:', {
+      message: error.message,
+      status: error.status,
+      data: error.data
+    });
+    
+    let userMessage = 'Failed to change password';
+    
+    if (error.status === 401) {
+      userMessage = 'Session expired. Please login again.';
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('agentic_ai_user');
+      }
+    } else if (error.status === 400) {
+      userMessage = error.data?.message || 'Invalid request. Please check your inputs.';
+    } else if (error.code === 'ERR_NETWORK') {
+      userMessage = 'Cannot connect to server. Please check your connection.';
+    }
+    
+    throw {
+      ...error,
+      userMessage
+    };
+  }
+},
+
+  // 6. Validate JWT token
+  verifyToken: async () => {
+    try {
+      console.log('🔍 Verifying JWT token');
+      const response = await api.get('/api/auth/me');
+      console.log('✅ Token is valid');
+      return response.data;
+    } catch (error) {
+      console.error('❌ Token verification error:', error.message);
+      
+      // Clear storage if token is invalid
       if (error.status === 401) {
+        console.log('🔒 Invalid token - clearing storage');
         if (typeof window !== 'undefined') {
           localStorage.removeItem('token');
           localStorage.removeItem('agentic_ai_user');
@@ -285,177 +343,82 @@ export const agenticAPI = {
     }
   },
 
-  logout: () => {
-    console.log('🚪 Logging out');
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-      localStorage.removeItem('agentic_ai_user');
-    }
-    return Promise.resolve({ success: true });
-  },
-
-  changePassword: async (passwordData) => {
+  // 7. Get current user
+  getMe: async () => {
     try {
-      console.log('🔐 Changing password');
-      const response = await api.put('/api/auth/changepassword', passwordData);
+      console.log('👤 Getting current user');
+      const response = await api.get('/api/auth/me');
+      console.log('✅ User data retrieved');
       return response.data;
     } catch (error) {
-      console.error('❌ Change password error:', error.message);
+      console.error('❌ Get user error:', error.message);
       throw error;
     }
   },
 
-  // ========== CHAT HISTORY ENDPOINTS ==========
-  saveChat: async (chatData) => {
+  // 8. User logout (server-side)
+  logout: async () => {
     try {
-      console.log('💾 Saving chat:', chatData.chatId);
+      console.log('🚪 Logging out from server');
+      const response = await api.post('/api/auth/logout');
       
-      if (!chatData.chatId) {
-        console.error('❌ chatId is required but not provided');
-        return {
-          success: false,
-          message: 'chatId is required',
-          status: 400
-        };
+      // Always clear localStorage on logout
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('agentic_ai_user');
       }
       
-      const formattedData = {
-        chatId: chatData.chatId,
-        title: chatData.title || 'New Chat',
-        messages: Array.isArray(chatData.messages) ? chatData.messages : [],
-        files: Array.isArray(chatData.files) ? chatData.files : [],
-        date: chatData.date || new Date().toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric' 
-        }),
-        time: chatData.time || new Date().toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        })
-      };
-      
-      console.log('📤 Sending chat data:', formattedData);
-      
-      const response = await api.post('/api/auth/chats', formattedData);
-      console.log('✅ Save chat response:', response.data);
+      console.log('✅ Logout successful');
       return response.data;
     } catch (error) {
-      console.error('❌ Save chat error:', error);
+      console.error('❌ Logout error:', error.message);
       
+      // Still clear localStorage even if server logout fails
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('agentic_ai_user');
+      }
+      
+      // Return success anyway since localStorage is cleared
       return {
-        success: false,
-        message: error.message || 'Failed to save chat',
-        status: error.status || 500,
-        data: error.data
+        success: true,
+        message: 'Logged out locally (server logout failed)'
       };
     }
   },
 
-  getChats: async () => {
+  // Helper function to check if user is logged in
+  isAuthenticated: () => {
+    if (typeof window === 'undefined') return false;
+    
+    const token = localStorage.getItem('token');
+    const user = localStorage.getItem('agentic_ai_user');
+    
+    return !!(token && user);
+  },
+
+  // Helper to get current user from localStorage
+  getCurrentUser: () => {
+    if (typeof window === 'undefined') return null;
+    
     try {
-      console.log('📚 Loading chats');
-      const response = await api.get('/api/auth/chats');
-      return response.data;
+      const userStr = localStorage.getItem('agentic_ai_user');
+      return userStr ? JSON.parse(userStr) : null;
     } catch (error) {
-      console.error('❌ Get chats error:', error.message);
-      
-      return {
-        success: false,
-        chats: [],
-        message: error.message
-      };
+      console.error('❌ Error parsing user data:', error);
+      return null;
     }
   },
 
-  deleteChat: async (chatId) => {
-    try {
-      console.log('🗑️ Deleting chat:', chatId);
-      const response = await api.delete(`/api/auth/chats/${chatId}`);
-      return response.data;
-    } catch (error) {
-      console.error('❌ Delete chat error:', error.message);
-      throw error;
-    }
-  },
-
-  // ========== AGENTIC AI ENDPOINTS ==========
-  getStatus: async () => {
-    try {
-      console.log('🤖 Checking Agentic AI status');
-      const response = await api.get('/api/agentic/status');
-      return response.data;
-    } catch (error) {
-      console.error('❌ Agentic status error:', error.message);
-      return {
-        success: false,
-        model_initialized: false,
-        model_name: "Not connected",
-        systems_count: 0,
-        available_systems: [],
-        message: error.message
-      };
-    }
-  },
-
-  chat: async (message, history = [], file_paths = {}) => {
-    try {
-      console.log('💬 Sending chat to Agentic AI:', message.substring(0, 50));
-      
-      const response = await api.post('/api/agentic/chat', {
-        message,
-        history,
-        file_paths
-      });
-      
-      return response.data;
-    } catch (error) {
-      console.error('❌ Agentic chat error:', error.message);
-      
-      return {
-        success: false,
-        response: "Sorry, I'm having trouble connecting to the AI service. Please try again.",
-        data: null,
-        file_outputs: [],
-        message: error.message
-      };
-    }
-  },
-
-  uploadFile: async (file) => {
-    try {
-      console.log('📤 Uploading file:', file.name);
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      const response = await api.post('/api/agentic/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      
-      console.log('📤 Upload response:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('❌ File upload error:', error);
-      throw error;
-    }
-  },
-
-  testChat: async () => {
-    try {
-      console.log('🧪 Testing chat endpoint');
-      const response = await api.get('/api/agentic/test');
-      return response.data;
-    } catch (error) {
-      console.error('❌ Test chat error:', error.message);
-      throw error;
-    }
+  // Helper to get token
+  getToken: () => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('token');
   }
 };
 
 // For backward compatibility
-export const authAPI = agenticAPI;
+export const agenticAPI = authAPI;
 
-// Default expoitrt
-export default agenticAPI;
+// Default export
+export default authAPI;

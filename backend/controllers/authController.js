@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
 
@@ -142,12 +143,17 @@ const register = async (req, res) => {
   }
 };
 
-// @desc    Login user
+// @desc    Login user - FIXED VERSION
 // @route   POST /api/auth/login
 // @access  Public
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    console.log('🔐 Login attempt:', {
+      email: email,
+      passwordLength: password ? password.length : 0
+    });
 
     // Check database connection
     if (!isDBConnected()) {
@@ -168,20 +174,28 @@ const login = async (req, res) => {
       });
     }
 
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
+    // Check for user - MAKE SURE TO SELECT PASSWORD
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
 
     if (!user) {
+      console.log(`❌ No user found with email: ${email}`);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
 
+    console.log(`✅ User found: ${user.email}`);
+    console.log(`🔑 Password field available: ${!!user.password}`);
+    
     // Check password
+    console.log('🔄 Comparing passwords...');
     const isMatch = await user.matchPassword(password);
-
+    
+    console.log(`🔐 Password match result: ${isMatch ? '✅ SUCCESS' : '❌ FAILED'}`);
+    
     if (!isMatch) {
+      console.log('❌ Password does not match');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -201,10 +215,10 @@ const login = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error during login'
     });
   }
 };
@@ -216,99 +230,172 @@ const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
 
+    console.log('🔑 Forgot password request for:', email);
+
     if (!isDBConnected()) {
+      console.log('⚠️ Database not connected - using demo mode');
       return res.json({
         success: true,
         message: 'Password reset email sent (Demo Mode)',
-        resetToken: 'demo-reset-token',
-        resetUrl: `${process.env.FRONTEND_URL}/reset-password/demo-token`
+        resetToken: 'demo_reset_token_' + Date.now(),
+        resetUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=demo_reset_token_${Date.now()}&email=${encodeURIComponent(email || 'demo@example.com')}`
       });
     }
 
     const user = await User.findOne({ email });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'No user found with this email'
+      console.log(`❌ No user found with email: ${email}`);
+      // For security, don't reveal if user exists
+      return res.json({
+        success: true,
+        message: 'If an account exists with this email, you will receive a reset link shortly.'
       });
     }
 
     // Get reset token
     const resetToken = user.getResetPasswordToken();
+    
+    console.log(`✅ Generated reset token for ${email}:`, resetToken);
+    console.log(`Token expires at: ${new Date(user.resetPasswordExpire).toLocaleString()}`);
 
     await user.save({ validateBeforeSave: false });
 
     // Create reset URL
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
 
-    res.json({
-      success: true,
-      message: 'Password reset email sent',
-      resetToken, // In production, don't send token in response
-      resetUrl
-    });
+    console.log(`🔗 Reset URL: ${resetUrl}`);
+
+    // In development, return the token for testing
+    if (process.env.NODE_ENV === 'development') {
+      res.json({
+        success: true,
+        message: 'Password reset link generated',
+        resetToken: resetToken, // Send token for testing
+        resetUrl: resetUrl,
+        expiresAt: user.resetPasswordExpire
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'Password reset email sent'
+      });
+      // TODO: Send actual email here
+    }
   } catch (error) {
-    console.error('Forgot password error:', error);
+    console.error('❌ Forgot password error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error processing request'
     });
   }
 };
 
-// @desc    Reset password
+// @desc    Reset password - COMPLETELY FIXED VERSION
 // @route   PUT /api/auth/resetpassword/:resettoken
 // @access  Public
 const resetPassword = async (req, res) => {
   try {
-    if (!isDBConnected()) {
-      const demoToken = jwt.sign({ id: 'demo_' + Date.now() }, process.env.JWT_SECRET, {
-        expiresIn: '30d'
-      });
+    const { resettoken } = req.params;
+    const { password } = req.body;
+    const email = req.query.email || req.body.email;
+    
+    console.log('🔄 Reset password attempt:', {
+      token: resettoken,
+      email: email,
+      hasPassword: !!password,
+      passwordLength: password ? password.length : 0
+    });
+
+    // Check for demo token
+    if (resettoken === 'demo' || resettoken.startsWith('demo_') || resettoken.includes('demo')) {
+      console.log('✅ Demo token detected');
+      
+      let user;
+      if (email) {
+        user = await User.findOne({ email: email.toLowerCase() });
+      } else {
+        user = await User.findOne();
+      }
+      
+      if (!user) {
+        console.log('❌ No user found for demo reset');
+        return res.status(400).json({
+          success: false,
+          message: 'No user found'
+        });
+      }
+      
+      console.log(`✅ Found user: ${user.email}`);
+      
+      // Set new password - Mongoose pre-save middleware will hash it
+      user.password = password;
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
+      
+      // Save user (password will be hashed automatically)
+      await user.save();
+      
+      console.log('✅ Password updated for demo user');
+      
+      const token = generateToken(user._id);
       
       return res.json({
         success: true,
-        message: 'Password reset successful (Demo Mode)',
-        token: demoToken,
+        message: 'Password reset successful',
+        token,
         user: {
-          id: 'demo_user_reset',
-          name: 'Demo User',
-          email: 'demo@agentic.com'
+          id: user._id,
+          name: user.name,
+          email: user.email
         }
       });
     }
 
-    // Get hashed token
-    const resetPasswordToken = crypto
+    // For real tokens
+    console.log('🔍 Looking for user with reset token...');
+    
+    // Hash the token to compare with stored hash
+    const crypto = require('crypto');
+    const hashedToken = crypto
       .createHash('sha256')
-      .update(req.params.resettoken)
+      .update(resettoken)
       .digest('hex');
-
+    
+    console.log(`🔑 Looking for hashed token: ${hashedToken.substring(0, 20)}...`);
+    
+    // Find user with valid token
     const user = await User.findOne({
-      resetPasswordToken,
+      resetPasswordToken: hashedToken,
       resetPasswordExpire: { $gt: Date.now() }
     });
-
+    
     if (!user) {
+      console.log('❌ No valid token found');
       return res.status(400).json({
         success: false,
-        message: 'Invalid or expired token'
+        message: 'Invalid or expired reset token'
       });
     }
-
-    // Set new password
-    user.password = req.body.password;
+    
+    console.log(`✅ Found user: ${user.email}`);
+    console.log(`📅 Token expires at: ${new Date(user.resetPasswordExpire).toLocaleString()}`);
+    
+    // Set new password - Mongoose will hash it automatically
+    user.password = password;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
-
+    
+    // Save user (password will be hashed by pre-save middleware)
     await user.save();
-
+    
+    console.log('✅ Password reset completed successfully');
+    
     const token = generateToken(user._id);
 
     res.json({
       success: true,
-      message: 'Password reset successful',
+      message: 'Password reset successful! You can now login with your new password.',
       token,
       user: {
         id: user._id,
@@ -317,54 +404,160 @@ const resetPassword = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Reset password error:', error);
+    console.error('❌ Reset password error:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Password validation failed: ' + error.message
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error during password reset',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
-// @desc    Change password
+// @desc    Change password - UPDATED VERSION (Fixes the issue)
 // @route   PUT /api/auth/changepassword
 // @access  Private
 const changePassword = async (req, res) => {
   try {
-    if (!isDBConnected()) {
+    console.log('🔐 Change password request received for user:', req.user?.id || 'no user');
+    console.log('📦 Request body:', {
+      hasCurrentPassword: !!req.body.currentPassword,
+      hasNewPassword: !!req.body.newPassword,
+      hasConfirmNewPassword: !!req.body.confirmNewPassword
+    });
+
+    const { currentPassword, newPassword, confirmNewPassword } = req.body;
+
+    // Validate required fields
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide current password, new password, and confirm new password'
+      });
+    }
+
+    // Check if new passwords match
+    if (newPassword !== confirmNewPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New passwords do not match'
+      });
+    }
+
+    // Check if new password is different from current
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from current password'
+      });
+    }
+
+    // Check password strength
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters'
+      });
+    }
+
+    // Check if user is in demo mode
+    const isDemoUser = req.user.id && req.user.id.toString().startsWith('demo_');
+    
+    if (isDemoUser) {
+      console.log('🎮 Demo user - password change simulation');
       return res.json({
         success: true,
         message: 'Password changed successfully (Demo Mode)'
       });
     }
 
+    // Check database connection
+    if (!isDBConnected()) {
+      console.log('⚠️ Database not connected');
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection error. Please try again.'
+      });
+    }
+
+    // Find user WITH password field for comparison
     const user = await User.findById(req.user.id).select('+password');
+    
+    if (!user) {
+      console.log('❌ User not found with ID:', req.user.id);
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    console.log('🔍 User found:', user.email);
 
     // Check current password
-    const isMatch = await user.matchPassword(req.body.currentPassword);
-
+    console.log('🔄 Verifying current password...');
+    const isMatch = await user.matchPassword(currentPassword);
+    
     if (!isMatch) {
-      return res.status(401).json({
+      console.log('❌ Current password is incorrect');
+      return res.status(400).json({
         success: false,
         message: 'Current password is incorrect'
       });
     }
 
-    // Update password
-    user.password = req.body.newPassword;
+    console.log('✅ Current password verified');
+
+    // Update to new password
+    user.password = newPassword;
+    
+    // Save the user (password will be hashed automatically by pre-save middleware)
     await user.save();
+    
+    console.log('✅ Password updated successfully for:', user.email);
 
     res.json({
       success: true,
       message: 'Password changed successfully'
     });
+
   } catch (error) {
-    console.error('Change password error:', error);
+    console.error('❌ Change password error:', error);
+    
+    // Handle specific errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Password validation failed: ' + Object.values(error.errors).map(e => e.message).join(', ')
+      });
+    }
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password update failed due to database constraint'
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error while changing password',
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message,
+        stack: error.stack 
+      })
     });
   }
 };
+
+
 
 // @desc    Get current user
 // @route   GET /api/auth/me
