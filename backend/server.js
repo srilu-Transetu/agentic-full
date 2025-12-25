@@ -484,19 +484,10 @@ async function readFileContent(filePath, filename) {
     console.log(`📖 Attempting to read: ${filename} (provided path: ${filePath})`);
     
     // Handle different path formats from frontend
-    let actualPath;
-    
-    if (filePath.includes('C:/')) {
-      // Frontend sent Windows path - extract just the filename
-      const justFilename = path.basename(filePath);
-      actualPath = path.join('uploads', justFilename);
-    } else if (filePath.includes('uploads/')) {
-      // Already has uploads/ prefix
-      actualPath = filePath;
-    } else {
-      // Just filename, prepend uploads/
-      actualPath = path.join('uploads', filePath);
-    }
+    // We simply extract the filename and assume it is in the 'uploads' directory
+    // This handles 'uploads/file', 'uploads\file', 'C:\...\file', or just 'file'
+    const justFilename = path.basename(filePath);
+    const actualPath = path.join('uploads', justFilename);
     
     console.log(`🔍 Looking for file at: ${actualPath}`);
     console.log(`🔍 Full path: ${path.resolve(actualPath)}`);

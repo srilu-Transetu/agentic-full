@@ -414,6 +414,73 @@ changePassword: async (passwordData) => {
   getToken: () => {
     if (typeof window === 'undefined') return null;
     return localStorage.getItem('token');
+  },
+
+  // ==================== AGENTIC SYSTEM ENDPOINTS ====================
+  agentic: {
+    // 1. Upload File
+    uploadFile: async (file) => {
+      try {
+        console.log('its uploading file...', file.name);
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        // Remove Content-Type header to let browser set it with boundary
+        const response = await api.post('/api/agentic/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        
+        console.log('✅ File uploaded:', response.data);
+        return response.data;
+      } catch (error) {
+        console.error('❌ Upload error:', error);
+        throw error;
+      }
+    },
+
+    // 2. Chat with Agentic System
+    chat: async (message, filePaths = {}, history = []) => {
+      try {
+        console.log('🤖 Sending to Agentic AI:', { message, fileCount: Object.keys(filePaths).length });
+        
+        const payload = {
+          message: message, // Changed from query to message to match backend
+          history: history,
+          file_paths: filePaths
+        };
+
+        const response = await api.post('/api/agentic/chat', payload);
+        console.log('✅ Agentic response:', response.data);
+        return response.data;
+      } catch (error) {
+        console.error('❌ Chat error:', error);
+        throw error;
+      }
+    },
+
+    // 3. Get System Status
+    getStatus: async () => {
+      try {
+        const response = await api.get('/api/agentic/status');
+        return response.data;
+      } catch (error) {
+        console.error('❌ Status check error:', error);
+        throw error;
+      }
+    },
+    
+    // 4. Test Endpoint
+    test: async () => {
+       try {
+        const response = await api.get('/api/agentic/test');
+        return response.data;
+      } catch (error) {
+        console.error('❌ Test error:', error);
+        throw error;
+      }
+    }
   }
 };
 

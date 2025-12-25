@@ -402,21 +402,37 @@ export default function LoginPage() {
                     <Sparkles className="w-4 h-4 text-white" />
                   </div>
                 </div>
-                <div className="ml-3">
+                <div className="ml-3 flex-1">
                   <p className="text-sm font-semibold text-blue-900 mb-1">Demo Credentials</p>
                   <div className="space-y-1">
                     <p className="text-xs text-blue-700">
-                      <span className="font-medium">Email:</span> demo@agentic.com
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      <span className="font-medium">Password:</span> Demo@1234
-                    </p>
-                    <p className="text-xs text-blue-700">
                       <span className="font-medium">Backend:</span> {backendStatus === 'connected' ? 'Connected ✅' : 'Demo Mode ⚠️'}
                     </p>
-                    <p className="text-xs text-blue-700">
-                      <span className="font-medium">URL:</span> {BACKEND_URL}
-                    </p>
+                    <button
+                        type="button"
+                        onClick={async () => {
+                            setLoading(true);
+                            try {
+                                const response = await fetch(`${BACKEND_URL}/api/demo/register`, { method: 'POST' });
+                                const data = await response.json();
+                                if (data.success) {
+                                  if (typeof window !== 'undefined') {
+                                    localStorage.setItem('token', data.user.token);
+                                    localStorage.setItem('agentic_ai_user', JSON.stringify(data.user));
+                                  }
+                                  setSuccessMessage('Demo Login Successful!');
+                                  setTimeout(() => router.push('/dashboard'), 1000);
+                                }
+                            } catch (e) {
+                                toast.error("Demo login failed");
+                            } finally {
+                                setLoading(false);
+                            }
+                        }}
+                        className="mt-2 text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
+                    >
+                        One-Click Demo Login
+                    </button>
                   </div>
                 </div>
               </div>

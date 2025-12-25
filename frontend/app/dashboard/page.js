@@ -228,6 +228,9 @@ export default function DashboardPage() {
     }
 
     setSelectedFiles(prev => [...prev, ...validFiles])
+    
+    // Reset input value to allow selecting the same file again
+    e.target.value = ''
   }
 
   const removeFile = (index) => {
@@ -257,195 +260,137 @@ export default function DashboardPage() {
     }
   };
 
+  // Modified handleSendMessage to use Agentic API
   const handleSendMessage = async () => {
-    if (!message.trim() && selectedFiles.length === 0) return
+     if (!message.trim() && selectedFiles.length === 0) return
 
-    // Create user message that includes BOTH text and files
-    const userMessage = {
-      text: message.trim() || (selectedFiles.length > 0 ? 
-        `Uploaded ${selectedFiles.length} file(s)` : ""),
-      isUser: true,
-      timestamp: new Date().toISOString(),
-      // Store the actual file objects for display
-      files: selectedFiles.length > 0 ? selectedFiles.map(file => ({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified,
-        uploaded: false,
-        // Store as File object for potential download
-        fileObject: file
-      })) : []
-    }
-
-    // Update chat with user message
-    const chatWithUserMessage = {
-      ...currentChat,
-      messages: [...(currentChat?.messages || []), userMessage],
-      files: selectedFiles.length > 0 ? [
-        ...(currentChat?.files || []), 
-        ...selectedFiles.map(file => ({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          uploadedAt: new Date().toISOString(),
-          // Store file reference
-          id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-        }))
-      ] : currentChat?.files || [],
-      lastUpdated: new Date().toISOString()
-    }
-    
-    setCurrentChat(chatWithUserMessage)
-
-    try {
-      if (selectedFiles.length > 0) {
-        // CASE: Text + Files (send them together)
-        const formData = new FormData();
-        
-        selectedFiles.forEach(file => {
-          formData.append('files', file);
-        });
-        
-        if (message.trim()) {
-          formData.append('message', message);
-        }
-        
-        formData.append('chatId', currentChat.chatId);
-
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/analyze`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          },
-          body: formData
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `Processing failed: ${response.status}`);
-        }
-
-        const combinedResult = await response.json();
-
-        const aiResponse = {
-          text: combinedResult.response || combinedResult.insights || 
-                `Processed your message "${message}" and ${selectedFiles.length} file(s)`,
-          isUser: false,
-          timestamp: new Date().toISOString(),
-          filesProcessed: selectedFiles.length,
-          // Include file analysis in AI response
-          fileAnalysis: combinedResult.fileAnalysis || []
-        };
-
-        const updatedChat = {
-          ...chatWithUserMessage,
-          messages: [...chatWithUserMessage.messages, aiResponse],
-          lastUpdated: new Date().toISOString()
-        };
-
-        setCurrentChat(updatedChat);
-        
-        const updatedChats = chats.map(chat => 
-          chat.chatId === updatedChat.chatId ? updatedChat : chat
-        );
-        setChats(updatedChats);
-        
-        localStorage.setItem(`chats_${user.id}`, JSON.stringify(updatedChats));
-        
-      } else {
-        // CASE: Text only (no files)
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/chat`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: message,
-            chatId: currentChat.chatId
-          })
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `Chat failed: ${response.status}`);
-        }
-
-        const chatResult = await response.json();
-
-        const aiResponse = {
-          text: chatResult.response || `Received your message: "${message}"`,
-          isUser: false,
-          timestamp: new Date().toISOString()
-        };
-
-        const updatedChat = {
-          ...chatWithUserMessage,
-          messages: [...chatWithUserMessage.messages, aiResponse],
-          lastUpdated: new Date().toISOString()
-        };
-
-        setCurrentChat(updatedChat);
-        
-        const updatedChats = chats.map(chat => 
-          chat.chatId === updatedChat.chatId ? updatedChat : chat
-        );
-        setChats(updatedChats);
-        
-        localStorage.setItem(`chats_${user.id}`, JSON.stringify(updatedChats));
+    // 1. Check or Create Chat
+    let activeChat = currentChat;
+    if (!activeChat) {
+      activeChat = {
+        chatId: `chat_${Date.now()}_${user.id}`,
+        title: 'New Chat',
+        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        messages: [],
+        files: [],
+        lastUpdated: new Date().toISOString(),
+        userId: user.id
       }
-
-      // Auto-generate title for new chats
-      if (!currentChat || currentChat.title === 'New Chat') {
-        const updatedChats = JSON.parse(localStorage.getItem(`chats_${user.id}`) || '[]');
-        const currentUpdatedChat = updatedChats.find(c => c.chatId === currentChat.chatId) || chatWithUserMessage;
-        
-        const suggestedTitle = message ? message.substring(0, 30) : 
-          `${selectedFiles.length} file(s) uploaded`;
-        const titledChat = { 
-          ...currentUpdatedChat, 
-          title: suggestedTitle + (message && message.length > 30 ? '...' : '')
-        };
-        setCurrentChat(titledChat);
-        
-        const titledChats = updatedChats.map(chat => 
-          chat.chatId === titledChat.chatId ? titledChat : chat
-        );
-        setChats(titledChats);
-        
-        localStorage.setItem(`chats_${user.id}`, JSON.stringify(titledChats));
-      }
-
-    } catch (error) {
-      console.error('Processing failed:', error);
-      
-      const errorResponse = {
-        text: `Error: ${error.message}`,
-        isUser: false,
-        timestamp: new Date().toISOString(),
-        error: true
-      };
-      
-      const errorChat = {
-        ...chatWithUserMessage,
-        messages: [...chatWithUserMessage.messages, errorResponse],
-        lastUpdated: new Date().toISOString()
-      };
-      
-      setCurrentChat(errorChat);
-      
-      const updatedChats = chats.map(chat => 
-        chat.chatId === errorChat.chatId ? errorChat : chat
-      );
-      setChats(updatedChats);
-      
-      localStorage.setItem(`chats_${user.id}`, JSON.stringify(updatedChats));
+      // We will perform state updates after getting the chat structure ready
     }
 
-    // Clear inputs
+    const currentFiles = [...selectedFiles];
+    const currentMessage = message;
+
+    // Clear inputs UI immediately for better UX
     setMessage('');
     setSelectedFiles([]);
+
+    // 2. Add User Message to UI
+    const userMsgObj = {
+      text: currentMessage.trim() || (currentFiles.length > 0 ? `Uploaded ${currentFiles.length} file(s)` : ""),
+      isUser: true,
+      timestamp: new Date().toISOString(),
+      files: currentFiles.map(f => ({ name: f.name, size: f.size, type: f.type }))
+    };
+
+    let updatedChat = {
+        ...activeChat,
+        messages: [...(activeChat.messages || []), userMsgObj],
+        lastUpdated: new Date().toISOString()
+    };
+
+    // Sync State
+    const updateStatsAndStorage = (chatObj) => {
+        setCurrentChat(chatObj);
+        setChats(prev => {
+            const exists = prev.find(c => c.chatId === chatObj.chatId);
+            const newList = exists 
+                ? prev.map(c => c.chatId === chatObj.chatId ? chatObj : c)
+                : [chatObj, ...prev];
+            localStorage.setItem(`chats_${user.id}`, JSON.stringify(newList));
+            return newList;
+        });
+    }
+    
+    updateStatsAndStorage(updatedChat);
+
+    try {
+        // 3. Upload Files (if any)
+        const filePaths = {};
+        if (currentFiles.length > 0) {
+             for (const file of currentFiles) {
+                 try {
+                     const uploadResult = await authAPI.agentic.uploadFile(file);
+                     if (uploadResult && (uploadResult.path || uploadResult.file?.path)) {
+                         // Backend expects: { "filename": "path" }
+                         // Using saved_name or filename as key
+                         const key = uploadResult.file?.saved_name || uploadResult.filename || file.name;
+                         const path = uploadResult.path || uploadResult.file?.path;
+                         filePaths[key] = path;
+                     }
+                 } catch (uploadErr) {
+                     console.error(`Failed to upload ${file.name}`, uploadErr);
+                     // Add error system message?
+                 }
+             }
+        }
+
+        // 4. Send to Chat API
+        // If we have files but no message, we might send a default "Analyze these files" 
+        // to convert it into a chat interaction, OR just upload them.
+        // However, the user flow usually implies "Here is a file" -> Response.
+        const chatMessage = currentMessage || (Object.keys(filePaths).length > 0 ? "Analyze these files" : "");
+        
+        if (chatMessage) {
+            const apiResponse = await authAPI.agentic.chat(
+                chatMessage, 
+                filePaths, 
+                updatedChat.messages.map(m => ({
+                    role: m.isUser ? 'user' : 'assistant',
+                    content: m.text,
+                    timestamp: m.timestamp
+                }))
+            );
+
+            // 5. Add AI Response
+            const aiMsgObj = {
+                text: apiResponse.response || "I processed your request.",
+                isUser: false,
+                timestamp: new Date().toISOString(),
+                // If the backend returns detailed file analysis or data, attach it
+                data: apiResponse.data
+            };
+
+            updatedChat = {
+                ...updatedChat,
+                messages: [...updatedChat.messages, aiMsgObj],
+                lastUpdated: new Date().toISOString()
+            };
+            
+            // Auto-title if new
+            if (updatedChat.title === 'New Chat') {
+                updatedChat.title = currentMessage.slice(0, 30) || 'File Analysis';
+            }
+
+            updateStatsAndStorage(updatedChat);
+        }
+
+    } catch (error) {
+        console.error('Chat processing error:', error);
+        const errorMsg = {
+            text: `Error: ${error.message || "Failed to process request"}`,
+            isUser: false,
+            timestamp: new Date().toISOString(),
+            isError: true
+        };
+        updatedChat = {
+            ...updatedChat,
+            messages: [...updatedChat.messages, errorMsg]
+        };
+        updateStatsAndStorage(updatedChat);
+    }
   }
 
   const uploadFilesToBackend = async (files) => {
